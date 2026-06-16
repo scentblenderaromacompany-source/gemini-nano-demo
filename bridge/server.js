@@ -871,7 +871,14 @@ async function streamToChrome(prompt, onChunk) {
 
 // Built-in Chrome AI APIs dispatcher
 async function builtInApi(api, data, options = {}) {
-    const response = await sendToChrome(api, { text: data, ...options }, 30000);
+    // Map bridge API names to background message types
+    const typeMap = {
+        'summarizer': 'summarize',
+        'translator': 'translate',
+        'language-detector': 'detect-language',
+    };
+    const msgType = typeMap[api] || api;
+    const response = await sendToChrome(msgType, { text: data, ...options }, 30000);
     if (response.error) throw new Error(response.error);
     return response.result;
 }
