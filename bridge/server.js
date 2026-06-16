@@ -40,11 +40,9 @@ app.post('/v1/chat/completions', async (req, res) => {
         return res.status(400).json({ error: 'messages array is required' });
     }
 
-    // Convert OpenAI format to Gemini Nano format
     const prompt = convertMessages(messages);
 
     if (stream) {
-        // SSE streaming response
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -52,40 +50,29 @@ app.post('/v1/chat/completions', async (req, res) => {
         const completionId = `chatcmpl-${randomUUID()}`;
         const created = Math.floor(Date.now() / 1000);
 
-        // Send via WebSocket to Chrome extension
         const result = await streamToChrome(prompt, (chunk) => {
             const sseData = JSON.stringify({
                 id: completionId,
                 object: 'chat.completion.chunk',
                 created,
                 model: 'gemini-nano',
-                choices: [{
-                    index: 0,
-                    delta: { content: chunk },
-                    finish_reason: null
-                }]
+                choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
             });
-            res.write(`data: ${sseData}\n\n`);
+            res.write(`data: ${sseData}\\n\\n`);
         });
 
-        // Send final chunk
         const finalData = JSON.stringify({
             id: completionId,
             object: 'chat.completion.chunk',
             created,
             model: 'gemini-nano',
-            choices: [{
-                index: 0,
-                delta: {},
-                finish_reason: 'stop'
-            }]
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
         });
-        res.write(`data: ${finalData}\n\n`);
-        res.write('data: [DONE]\n\n');
+        res.write(`data: ${finalData}\\n\\n`);
+        res.write('data: [DONE]\\n\\n');
         res.end();
 
     } else {
-        // Non-streaming response
         try {
             const result = await promptChrome(prompt, temperature);
             res.json({
@@ -98,11 +85,7 @@ app.post('/v1/chat/completions', async (req, res) => {
                     message: { role: 'assistant', content: result },
                     finish_reason: 'stop'
                 }],
-                usage: {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0
-                }
+                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
             });
         } catch (err) {
             res.status(500).json({ error: err.message });
@@ -119,13 +102,48 @@ app.post('/v1/analyze-image', async (req, res) => {
     }
 
     try {
-        const result = await analyzeImageWithChrome(image, prompt);
+        const result = await builtInApi('analyze-image', { image, prompt });
         if (format === 'json') {
-            try { res.json(JSON.parse(result)); }
-            catch { res.json({ description: result }); }
+            try { res.json(JSON.parse(result)); } catch { res.json({ description: result }); }
         } else {
             res.json({ result });
         }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── Summarize via Chrome Summarizer API ──
+app.post('/v1/summarize', async (req, res) => {
+    const { text, type = 'key-points' } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+    try {
+        const result = await builtInApi('summarizer', text, { type });
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── Translate via Chrome Translator API ──
+app.post('/v1/translate', async (req, res) => {
+    const { text, targetLanguage = 'es' } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+    try {
+        const result = await builtInApi('translator', text, { targetLanguage });
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── Detect language via Chrome Language Detector API ──
+app.post('/v1/detect-language', async (req, res) => {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+    try {
+        const result = await builtInApi('language-detector', text);
+        res.json({ result });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -147,11 +165,9 @@ app.post('/v1/screenshot-analyze', async (req, res) => {
 // Chrome Communication Layer
 // ══════════════════════════════════════════════════════════
 
-// Store pending requests
 const pendingRequests = new Map();
 let chromeWs = null;
 
-// WebSocket server for Chrome extension to connect
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -175,7 +191,6 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         console.log('[Bridge] Chrome extension disconnected');
         chromeWs = null;
-        // Reject all pending requests
         for (const [id, pending] of pendingRequests) {
             pending.reject(new Error('Chrome extension disconnected'));
         }
@@ -204,49 +219,41 @@ function sendToChrome(type, payload, timeout = 120000) {
     });
 }
 
-// Convert OpenAI messages format to simple prompt string
 function convertMessages(messages) {
-    // Extract system prompt and user messages
     let system = '';
     const userMessages = [];
 
     for (const msg of messages) {
         if (msg.role === 'system') {
-            system += msg.content + '\n\n';
+            system += msg.content + '\\n\\n';
         } else if (msg.role === 'user') {
-            // Handle multimodal content
             if (Array.isArray(msg.content)) {
                 const textParts = msg.content.filter(p => p.type === 'text').map(p => p.text);
-                userMessages.push(textParts.join('\n'));
+                userMessages.push(textParts.join('\\n'));
             } else {
                 userMessages.push(msg.content);
             }
         } else if (msg.role === 'assistant') {
-            // Include assistant history for context
             userMessages.push(`Assistant: ${msg.content}`);
         }
     }
 
     let prompt = '';
-    if (system) prompt += `[System] ${system}\n`;
-    prompt += userMessages.join('\n\n');
+    if (system) prompt += `[System] ${system}\\n`;
+    prompt += userMessages.join('\\n\\n');
     return prompt;
 }
 
-// Prompt Chrome extension (non-streaming)
 async function promptChrome(prompt, temperature = 0.7) {
     const response = await sendToChrome('prompt', { prompt, temperature }, 180000);
     if (response.error) throw new Error(response.error);
     return response.result;
 }
 
-// Stream from Chrome extension
 async function streamToChrome(prompt, onChunk) {
     const response = await sendToChrome('prompt-stream', { prompt }, 60000);
     if (response.error) throw new Error(response.error);
 
-    // For now, bridge returns full result (streaming would need chunked WebSocket)
-    // We simulate streaming by chunking the response
     const text = response.result;
     const chunkSize = 20;
     for (let i = 0; i < text.length; i += chunkSize) {
@@ -255,14 +262,13 @@ async function streamToChrome(prompt, onChunk) {
     }
 }
 
-// Analyze image via Chrome extension
-async function analyzeImageWithChrome(imageBase64, prompt) {
-    const response = await sendToChrome('analyze-image', { image: imageBase64, prompt }, 60000);
+// Built-in Chrome AI APIs dispatcher
+async function builtInApi(api, data, options = {}) {
+    const response = await sendToChrome(api, { text: data, ...options }, 30000);
     if (response.error) throw new Error(response.error);
     return response.result;
 }
 
-// Screenshot + analyze
 async function screenshotAndAnalyze(tabId, prompt) {
     const response = await sendToChrome('screenshot-analyze', { tabId, prompt }, 60000);
     if (response.error) throw new Error(response.error);
@@ -274,8 +280,7 @@ async function screenshotAndAnalyze(tabId, prompt) {
 // ══════════════════════════════════════════════════════════
 
 server.listen(PORT, () => {
-    console.log(`
-╔══════════════════════════════════════════════════════╗
+    console.log(`\n╔══════════════════════════════════════════════════════╗
 ║  Gemini Nano Local API Bridge                       ║
 ║                                                      ║
 ║  HTTP API:   http://localhost:${PORT}/v1              ║
@@ -288,7 +293,11 @@ server.listen(PORT, () => {
 ║  Image analysis:                                     ║
 ║  POST http://localhost:${PORT}/v1/analyze-image     ║
 ║                                                      ║
+║  Built-in AI APIs:                                   ║
+║  POST /v1/summarize                                  ║
+║  POST /v1/translate                                  ║
+║  POST /v1/detect-language                            ║
+║                                                      ║
 ║  Waiting for Chrome extension to connect via WS...   ║
-╚══════════════════════════════════════════════════════╝
-`);
+╚══════════════════════════════════════════════════════╝`);
 });

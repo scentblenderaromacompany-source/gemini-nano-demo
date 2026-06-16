@@ -211,7 +211,7 @@ function addMessage(type, text) {
 async function sendMessage() {
     const input = document.getElementById('user-input');
     const userText = input.value.trim();
-    if (!userText || !session) return;
+    if (!userText) return;
 
     input.value = '';
     autoResize(input);
@@ -220,7 +220,19 @@ async function sendMessage() {
     const btn = document.getElementById('send-btn');
     btn.disabled = true;
 
-    // Build the full prompt
+    // Check if active skill uses built-in Chrome API
+    if (activeSkill && activeSkill.useBuiltInApi) {
+        try {
+            const apiResult = await callBuiltInApi(activeSkill.useBuiltInApi, userText);
+            addMessage('skill', `[⚡ ${activeSkill.name}] ${apiResult}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
+    // Regular Prompt API path (no Op)
     let fullPrompt = '';
 
     // 1. System prompt from skill
@@ -341,6 +353,26 @@ window.analyzeImage = async function(imageB64, prompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: imageB64, prompt })
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    return data.result;
+};
+
+// ── Built-in Chrome AI APIs via bridge ──
+window.callBuiltInApi = async function(api, text, options = {}) {
+    const endpoints = {
+        'summarizer': '/v1/summarize',
+        'translator': '/v1/translate',
+        'language-detector': '/v1/detect-language',
+    };
+    const endpoint = endpoints[api];
+    if (!endpoint) throw new Error('Unknown built-in API: ' + api);
+
+    const resp = await fetch(`http://localhost:8765${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, ...options })
     });
     const data = await resp.json();
     if (data.error) throw new Error(data.error);

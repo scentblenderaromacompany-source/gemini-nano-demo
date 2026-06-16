@@ -1,8 +1,9 @@
 // Gemini Nano Assistant — Background Service Worker v5
-// Fresh session per request + keepalive + error recovery
+// Bulletproof WebSocket + fresh session per request + built-in AI APIs
 
 let bridgeWs = null;
 let isConnecting = false;
+
 const BRIDGE_URL = 'ws://localhost:8765/ws';
 
 // ── Keep service worker alive ──
@@ -80,8 +81,20 @@ async function handleBridgeMessage(msg) {
                 result = await handleScreenshotAnalyze(msg.tabId, msg.prompt);
                 break;
 
+            case 'summarize':
+                result = await handleSummarize(msg.text, msg.type);
+                break;
+
+            case 'translate':
+                result = await handleTranslate(msg.text, msg.targetLanguage);
+                break;
+
+            case 'detect-language':
+                result = await handleDetectLanguage(msg.text);
+                break;
+
             default:
-                sendToBridge(id, { error: `Unknown type: ${type}` });
+                sendToBridge(id, { error: 'Unknown type: ' + type });
                 return;
         }
 
@@ -106,21 +119,23 @@ function sendToBridge(id, payload) {
 }
 
 // ── Gemini Nano Prompt (fresh session per request) ──
-async function handlePrompt(prompt, temperature = 0.7) {
+async function handlePrompt(prompt, temperature) {
+    temperature = temperature || 0.7;
     let s = null;
     try {
-        // Check availability first
+        if (typeof LanguageModel === 'undefined') {
+            throw new Error('LanguageModel API not defined. Enable chrome://flags/#optimization-guide-on-device-model');
+        }
         const avail = await LanguageModel.availability();
         if (avail === 'unavailable') {
             throw new Error('LanguageModel unavailable — enable chrome://flags/#optimization-guide-on-device-model');
         }
         if (avail === 'downloadable') {
-            throw new Error('LanguageModel not yet downloaded — visit chrome://on-device-internals/ to trigger download');
+            throw new Error('LanguageModel not yet downloaded');
         }
 
-        // Create fresh session for each request (reuse causes hangs)
         s = await LanguageModel.create({
-            temperature,
+            temperature: temperature,
             topK: 40,
             expectedOutputs: [{ type: 'text', languages: ['en'] }],
         });
@@ -132,9 +147,8 @@ async function handlePrompt(prompt, temperature = 0.7) {
         console.error('[BG] Prompt error:', err);
         throw err;
     } finally {
-        // Always destroy session to free resources
         if (s) {
-            try { s.destroy(); } catch (e) { /* ignore */ }
+            try { s.destroy(); } catch (ignored) { /* ignore */ }
         }
     }
 }
@@ -172,7 +186,7 @@ async function handleImageAnalysis(imageBase64, prompt) {
         throw err;
     } finally {
         if (s) {
-            try { s.destroy(); } catch (e) { /* ignore */ }
+            try { s.destroy(); } catch (ignored) { /* ignore */ }
         }
     }
 }
@@ -193,10 +207,49 @@ async function captureScreenshot(tabId) {
             target: { tabId: targetTabId },
             func: () => document.title + ' | ' + document.body.innerText.substring(0, 2000)
         });
-        return results?.[0]?.result || null;
+        return results && results[0] ? results[0].result : null;
     } catch (e) {
         console.error('[BG] Screenshot error:', e);
         return null;
+    }
+}
+
+// ── Built-in Chrome AI APIs ──
+async function handleSummarize(text, summaryType) {
+    try {
+        const summarizer = await Summarizer.create({
+            type: summaryType || 'key-points',
+            format: 'plain-text',
+            length: 'medium',
+        });
+        return await summarizer.summarize(text);
+    } catch (err) {
+        console.error('[BG] Summarizer error:', err);
+        throw new Error('Summarizer API unavailable: ' + err.message);
+    }
+}
+
+async function handleTranslate(text, targetLanguage) {
+    try {
+        const translator = await Translator.create({
+            sourceLanguage: null,
+            targetLanguage: targetLanguage || 'es',
+        });
+        return await translator.translate(text);
+    } catch (err) {
+        console.error('[BG] Translator error:', err);
+        throw new Error('Translator API unavailable: ' + err.message);
+    }
+}
+
+async function handleDetectLanguage(text) {
+    try {
+        const detector = await LanguageDetector.create();
+        const result = await detector.detect(text);
+        return JSON.stringify(result);
+    } catch (err) {
+        console.error('[BG] LanguageDetector error:', err);
+        throw new Error('LanguageDetector API unavailable: ' + err.message);
     }
 }
 
@@ -210,4 +263,4 @@ chrome.commands.onCommand.addListener((command) => {
 
 // ── Initialize ──
 connectToBridge();
-console.log('[BG] Gemini Nano bridge started (v5 — fresh sessions)');
+console.log('[BG] Gemini Nano bridge started (v5 — fresh sessions + built-in APIs)');

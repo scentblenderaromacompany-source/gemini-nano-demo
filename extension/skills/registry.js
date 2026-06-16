@@ -1,5 +1,9 @@
 // Gemini Nano Skills Registry
-// Each skill = { id, name, icon, description, systemPrompt, extract, transform }
+// Each skill = { id, name, icon, description, systemPrompt, extract, transform, useBuiltInApi }
+//
+// useBuiltInApi = 'summarizer' | 'translator' | 'language-detector' | null
+//   When set, the side panel calls the bridge's built-in API instead of the Prompt API
+//   Much faster and more reliable for structured tasks.
 
 const SKILLS = [
   // --- CODE ---
@@ -226,6 +230,32 @@ Include relevant hashtags. Make each version distinct in tone.`,
     mode: 'page',
   },
 
+  // --- BUILT-IN AI (Chrome APIs — fast, no model prompt) ---
+  {
+    id: 'summarizer',
+    name: 'Summary',
+    icon: '📋',
+    description: 'Summarize page text using Chrome Summarizer API',
+    useBuiltInApi: 'summarizer',
+    mode: 'page',
+  },
+  {
+    id: 'translator',
+    name: 'Translate',
+    icon: '🌐',
+    description: 'Translate selected text via Chrome Translator API',
+    useBuiltInApi: 'translator',
+    mode: 'selection',
+  },
+  {
+    id: 'lang-detect',
+    name: 'Detect Lang',
+    icon: '🔤',
+    description: 'Detect the language of page text via Chrome API',
+    useBuiltInApi: 'language-detector',
+    mode: 'page',
+  },
+
   // --- LANGUAGE ---
   {
     id: 'translate-en-ja',
@@ -292,6 +322,7 @@ function getAllSkills() {
 
 function getSkillsByCategory() {
     const categories = {
+        '⚡ Built-in': SKILLS.filter(s => s.useBuiltInApi),
         '💻 Code': SKILLS.filter(s => s.id.startsWith('code-')),
         '✍️ Writing': SKILLS.filter(s => s.id.startsWith('write-') || s.id === 'proofread' || s.id === 'simplify'),
         '📊 Analysis': SKILLS.filter(s => ['seo-audit', 'security-check', 'a11y-check', 'data-extract', 'summarize-doc', 'compare'].includes(s.id)),
@@ -300,4 +331,10 @@ function getSkillsByCategory() {
         '🔬 Research': SKILLS.filter(s => s.id === 'fact-check' || s.id === 'research-questions'),
     };
     return categories;
+}
+
+// Check if a skill uses a built-in Chrome API
+function skillUsesBuiltInApi(skillId) {
+    const skill = getSkill(skillId);
+    return skill && skill.useBuiltInApi ? skill.useBuiltInApi : null;
 }
