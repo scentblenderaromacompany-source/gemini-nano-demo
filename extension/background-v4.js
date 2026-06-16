@@ -99,7 +99,10 @@ async function handleBridgeMessage(msg) {
         break;
 
       case 'analyze-image':
-        result = await handleImageAnalysis(msg.image, msg.prompt);
+        // Data comes wrapped in text field from bridge's builtInApi
+        const imageData = typeof msg.text === 'object' ? msg.text.image : msg.image;
+        const promptData = typeof msg.text === 'object' ? msg.text.prompt : msg.prompt;
+        result = await handleImageAnalysis(imageData, promptData);
         break;
 
       case 'screenshot-analyze':
@@ -182,7 +185,7 @@ async function handlePrompt(prompt, temperature) {
       expectedOutputs: [{ type: 'text', languages: ['en'] }],
     });
 
-    const result = await session.prompt(prompt);
+    const result = await session.prompt(prompt, { outputLanguage: 'en' });
     return result;
   } catch (err) {
     console.error('[BG] Prompt error:', err);
@@ -217,15 +220,18 @@ async function handleImageAnalysis(imageBase64, prompt) {
     }
     const blob = new Blob([bytes], { type: 'image/png' });
 
-    const result = await session.prompt([
-      {
-        role: 'user',
-        content: [
-          { type: 'text', value: prompt },
-          { type: 'image', value: blob },
-        ],
-      },
-    ]);
+    const result = await session.prompt(
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', value: prompt },
+            { type: 'image', value: blob },
+          ],
+        },
+      ],
+      { outputLanguage: 'en' }
+    );
 
     return result;
   } catch (err) {

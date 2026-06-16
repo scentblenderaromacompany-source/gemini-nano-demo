@@ -292,7 +292,7 @@ async function sendMessage() {
     const aiMsg = addMessage('ai', '');
 
     try {
-        const stream = session.promptStreaming(conversationHistory);
+        const stream = session.promptStreaming(conversationHistory, { outputLanguage: 'en' });
         for await (const chunk of stream) {
             aiMsg.textContent += chunk;
             document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;

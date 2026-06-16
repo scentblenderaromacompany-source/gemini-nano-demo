@@ -13,6 +13,7 @@
 
 import { execSync } from 'child_process';
 import http from 'http';
+import fs from 'fs';
 
 const AGENT_BROWSER = process.env.AGENT_BROWSER_BIN ||
   '/home/bobby/.local/lib/node_modules/agent-browser/bin/agent-browser.js';
@@ -20,7 +21,9 @@ const BRIDGE_URL = 'http://localhost:8765/v1/chat/completions';
 const SESSION = 'gemini-nano-agent';
 const DEFAULT_MAX_STEPS = 20;
 
-const SYSTEM_PROMPT = `You are a browser automation agent. You control a web browser via accessibility tree snapshots AND WebMCP tools.
+let lastScreenshot = null;
+
+const SYSTEM_PROMPT = `You are a browser automation agent. You control a web browser via accessibility tree snapshots AND WebMCP tools AND vision (screenshots).
 
 Your job: complete the user's task by deciding the next action.
 
@@ -32,6 +35,8 @@ AVAILABLE ACTIONS (respond with JSON only):
 - {"action": "scroll", "direction": "down", "amount": 500} — Scroll page
 - {"action": "navigate", "url": "https://..."} — Go to URL
 - {"action": "webmcp", "tool": "name", "args": {...}} — Call a WebMCP tool on the page
+- {"action": "screenshot", "annotate": true}   — Take annotated screenshot (returns base64 PNG)
+- {"action": "vision", "prompt": "describe...", "image": "base64"} — Analyze image with Gemini Nano (provide base64 from screenshot action)
 - {"action": "done", "result": "summary"}   — Task is complete
 - {"action": "stuck", "reason": "why"}      — Cannot proceed
 
@@ -40,10 +45,11 @@ RULES:
 2. Use refs from the accessibility tree (e.g., @e3, @e12)
 3. WebMCP tools are semantic page capabilities — prefer them over raw clicks when available
 4. Common WebMCP tools: search_page, extract_links, extract_forms, get_page_metadata, click_element, fill_form, scroll_to
-5. After each action, you'll see the updated page state
-6. If a page needs loading, just say done for this step
-7. If you can't find the right element, try scrolling
-8. Be concise — just the JSON action, no explanation`;
+5. VISION: Use "screenshot" to capture annotated image, then "vision" with prompt + that image to analyze visually
+6. After each action, you'll see the updated page state
+7. If a page needs loading, just say done for this step
+8. If you can't find the right element, try scrolling
+9. Be concise — just the JSON action, no explanation`;
 
 function runAB(...args) {
   const headed = args.includes('--headed');
@@ -144,6 +150,12 @@ function parseAction(text) {
 
 function executeAction(action, headed = false) {
   const act = action.action;
+  // Make async for screenshot and vision cases
+  const asyncCases = ['screenshot', 'vision'];
+  if (asyncCases.includes(act)) {
+    return executeActionAsync(action, headed);
+  }
+
   switch (act) {
     case 'click':
       runAB('click', action.ref, ...(headed ? ['--headed'] : []));
@@ -188,6 +200,40 @@ function executeAction(action, headed = false) {
   }
 }
 
+async function executeActionAsync(action, headed = false) {
+  const act = action.action;
+  switch (act) {
+    case 'screenshot':
+      console.log(`   📸 Taking ${action.annotate ? 'annotated ' : ''}screenshot...`);
+      const shot = await takeScreenshot(action.annotate !== false);
+      console.log(`   📸 Screenshot result: ${JSON.stringify(shot).slice(0, 200)}`);
+      lastScreenshot = shot;
+      sleep(1000);
+      return 'ok';
+    case 'vision':
+      if (!action.image && !lastScreenshot) {
+        console.log(`   👁️ Vision: No image provided and no recent screenshot`);
+        return 'ok';
+      }
+      // Use actual base64 from lastScreenshot if action.image is placeholder
+      let imageData = action.image;
+      if (action.image === 'base64' || !action.image) {
+        imageData = lastScreenshot?.base64 || lastScreenshot?.data || lastScreenshot?.result;
+      }
+      if (!imageData) {
+        console.log(`   👁️ Vision: No image data available`);
+        return 'ok';
+      }
+      console.log(`   👁️ Analyzing image with prompt: ${action.prompt?.slice(0, 100)}...`);
+      const visionResult = await analyzeImageWithNano(action.prompt, imageData);
+      console.log(`   👁️ Vision result: ${JSON.stringify(visionResult).slice(0, 300)}`);
+      sleep(1500);
+      return 'ok';
+    default:
+      return executeAction(action, headed);
+  }
+}
+
 function sleep(ms) { const end = Date.now() + ms; while (Date.now() < end); }
 
 // ── WebMCP Helpers ──
@@ -227,6 +273,66 @@ async function discoverWebMcpTools() {
   // and we'll try to discover tools from there
   // This is a placeholder - real implementation needs the tabId from the extension
   return [];
+}
+
+// ── Multimodal Vision Helpers ──
+async function takeScreenshot(annotate = true) {
+  const importPath = '/home/bobby/.agent-browser/tmp/screenshots';
+  const cmd = [AGENT_BROWSER, '--session', SESSION, '--json', 'screenshot'];
+  if (annotate) cmd.push('--annotate');
+  
+  try {
+    const out = execSync(cmd.join(' '), { timeout: 30000, encoding: 'utf-8' });
+    if (out.trim()) {
+      try { 
+        const data = JSON.parse(out);
+        // Get the screenshot file path
+        const screenshotPath = data.data?.path || data.result?.data?.path;
+        if (screenshotPath && fs.existsSync(screenshotPath)) {
+          // Read file as base64
+          const base64 = fs.readFileSync(screenshotPath, { encoding: 'base64' });
+          return { success: true, base64, path: screenshotPath };
+        }
+        return data;
+      } catch { return { raw: out.trim() }; }
+    }
+    return { ok: true };
+  } catch (e) {
+    const stdout = e.stdout?.toString().trim();
+    if (stdout) {
+      try { 
+        const data = JSON.parse(stdout);
+        const screenshotPath = data.data?.path || data.result?.data?.path;
+        if (screenshotPath && fs.existsSync(screenshotPath)) {
+          const base64 = fs.readFileSync(screenshotPath, { encoding: 'base64' });
+          return { success: true, base64, path: screenshotPath };
+        }
+        return data;
+      } catch { return { raw: stdout }; }
+    }
+    throw new Error(e.stderr?.toString().trim() || e.message);
+  }
+}
+
+async function analyzeImageWithNano(prompt, imageBase64) {
+  // Use bridge's analyze-image endpoint
+  return new Promise(resolve => {
+    const req = http.request({
+      hostname: 'localhost', port: 8765, path: '/v1/analyze-image',
+      method: 'POST', headers: { 'Content-Type': 'application/json' }
+    }, res => {
+      let body = ''; res.on('data', c => body += c);
+      res.on('end', () => {
+        try { 
+          const data = JSON.parse(body);
+          resolve(data.result || data); 
+        } catch { resolve({ error: 'Parse error' }); }
+      });
+    });
+    req.on('error', e => resolve({ error: e.message }));
+    req.write(JSON.stringify({ image: imageBase64, prompt }));
+    req.end();
+  });
 }
 
 async function checkBridge() {
@@ -300,7 +406,15 @@ async function runAgent(task, maxSteps = DEFAULT_MAX_STEPS, headed = false) {
 
     messages.push({ role: 'assistant', content: response });
 
-    const result = executeAction(action, headed);
+    const result = await executeAction(action, headed);
+    
+    // Include action result in conversation for the model to see
+    if (result && typeof result === 'object') {
+      messages.push({ role: 'user', content: `Action result: ${JSON.stringify(result).slice(0, 1000)}` });
+    } else if (result && result !== 'ok' && result !== 'done' && result !== 'stuck') {
+      messages.push({ role: 'user', content: `Action result: ${result}` });
+    }
+
     if (result === 'done' || result === 'stuck') break;
   }
 

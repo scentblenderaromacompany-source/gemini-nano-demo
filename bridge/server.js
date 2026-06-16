@@ -249,6 +249,34 @@ app.post('/v1/browser/agent', async (req, res) => {
     }
 });
 
+// ── Browser screenshot endpoint ──
+import fs from 'fs';
+
+app.post('/v1/browser/screenshot', async (req, res) => {
+    const { path, annotate = true, fullPage = false, quality = 80 } = req.body;
+    try {
+        const args = ['screenshot'];
+        if (path) args.push(path);
+        if (annotate) args.push('--annotate');
+        if (fullPage) args.push('--fullpage');
+        args.push('--screenshot-quality', String(quality));
+        args.push('--screenshot-format', 'png');
+        
+        const result = await runAgentBrowser(...args);
+        
+        // If result has a file path, read it as base64
+        const screenshotPath = result.data?.path || result.result?.data?.path;
+        let base64 = null;
+        if (screenshotPath && fs.existsSync(screenshotPath)) {
+            base64 = fs.readFileSync(screenshotPath, { encoding: 'base64' });
+        }
+        
+        res.json({ result: { ...result, base64 } });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ── WebMCP endpoints ──
 app.post('/v1/webmcp/discover', async (req, res) => {
     const { tabId } = req.body;
