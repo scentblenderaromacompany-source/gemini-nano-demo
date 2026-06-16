@@ -195,6 +195,7 @@ async function promptBridge(prompt, temperature = 0.3) {
 
     bridgeWs.send(JSON.stringify({ id, type: 'prompt', prompt, temperature }));
   });
+}
 
 // Convert messages to prompt string (for bridge)
 function convertMessages(messages) {
