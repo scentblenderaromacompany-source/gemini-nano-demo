@@ -314,6 +314,55 @@ app.post('/v1/webmcp/register', async (req, res) => {
     }
 });
 
+// ── Agent Loop endpoints (extension-side) ──
+app.post('/v1/agent/start', async (req, res) => {
+    const { task, maxSteps = 20, sessionId } = req.body;
+    if (!task) return res.status(400).json({ error: 'task is required' });
+    try {
+        const result = await sendToChrome('agent-start', { task, maxSteps, sessionId }, 60000);
+        if (result.error) throw new Error(result.error);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/agent/step', async (req, res) => {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    try {
+        const result = await sendToChrome('agent-step', { sessionId }, 60000);
+        if (result.error) throw new Error(result.error);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/agent/stop', async (req, res) => {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    try {
+        const result = await sendToChrome('agent-stop', { sessionId }, 10000);
+        if (result.error) throw new Error(result.error);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/agent/status', async (req, res) => {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    try {
+        const result = await sendToChrome('agent-status', { sessionId }, 10000);
+        if (result.error) throw new Error(result.error);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ══════════════════════════════════════════════════════════
 // Chrome Communication Layer
 // ══════════════════════════════════════════════════════════
@@ -331,6 +380,13 @@ wss.on('connection', (ws) => {
     ws.on('message', (data) => {
         try {
             const msg = JSON.parse(data.toString());
+            
+            // Handle prompt messages from background (agent loop)
+            if (msg.type === 'prompt') {
+                handleBridgePrompt(msg);
+                return;
+            }
+            
             const pending = pendingRequests.get(msg.id);
             if (pending) {
                 pending.resolve(msg);
@@ -395,6 +451,38 @@ function convertMessages(messages) {
     if (system) prompt += `[System] ${system}\n`;
     prompt += userMessages.join('\n\n');
     return prompt;
+}
+
+// Handle prompt from background (agent loop) - use local LanguageModel
+async function handleBridgePrompt(msg) {
+    const { id, prompt, temperature = 0.3 } = msg;
+    try {
+        if (typeof LanguageModel === 'undefined') {
+            chromeWs.send(JSON.stringify({ id, error: 'LanguageModel not available' }));
+            return;
+        }
+        
+        const avail = await LanguageModel.availability();
+        if (avail !== 'available' && avail !== 'downloadable') {
+            chromeWs.send(JSON.stringify({ id, error: `LanguageModel ${avail}` }));
+            return;
+        }
+        
+        const session = await LanguageModel.create({
+            temperature,
+            topK: 40,
+            expectedInputs: [{ type: 'text', languages: ['en'] }],
+            expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        });
+        
+        const result = await session.prompt(prompt);
+        await session.destroy();
+        
+        chromeWs.send(JSON.stringify({ id, result }));
+    } catch (err) {
+        console.error('[Bridge] Prompt error:', err);
+        chromeWs.send(JSON.stringify({ id, error: err.message }));
+    }
 }
 
 async function promptChrome(prompt, temperature = 0.7) {

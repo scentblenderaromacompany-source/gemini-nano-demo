@@ -257,6 +257,18 @@ async function sendMessage() {
         return;
     }
 
+    // Handle Agent skills (extension-side autonomous loop)
+    if (activeSkill && activeSkill.agentAction) {
+        try {
+            const result = await callAgentApi(activeSkill.agentAction, userText);
+            addMessage('skill', `[🤖 ${activeSkill.name}] ${result}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
     // Regular Prompt API path (no Op)
     let fullPrompt = '';
 
@@ -503,6 +515,53 @@ window.callWebMcpApi = async function(action, input, skill) {
 
     throw new Error('Unknown WebMCP action: ' + action);
 };
+
+// ── Agent Loop API (extension-side) ──
+window.callAgentApi = async function(action, input) {
+    const endpoints = {
+        'start': '/v1/agent/start',
+        'step': '/v1/agent/step',
+        'status': '/v1/agent/status',
+        'stop': '/v1/agent/stop',
+    };
+    const endpoint = endpoints[action];
+    if (!endpoint) throw new Error('Unknown agent action: ' + action);
+
+    let body = {};
+    if (action === 'start') {
+        // Input: "task description" or JSON with maxSteps
+        try { body = JSON.parse(input); }
+        catch { body = { task: input, maxSteps: 20 }; }
+    } else if (action === 'step') {
+        body = { sessionId: input || getActiveSessionId() };
+    } else if (action === 'status') {
+        body = { sessionId: input || getActiveSessionId() };
+    } else if (action === 'stop') {
+        body = { sessionId: input || getActiveSessionId() };
+    }
+
+    const resp = await fetch(`http://localhost:8765${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    
+    const result = data.result;
+    
+    // Store sessionId for step/status/stop
+    if (action === 'start' && result?.sessionId) {
+        window.activeAgentSessionId = result.sessionId;
+    }
+    
+    return JSON.stringify(result, null, 2);
+};
+
+let activeAgentSessionId = null;
+function getActiveSessionId() {
+    return activeAgentSessionId;
+}
 
 async function getCurrentTabId() {
     try {
