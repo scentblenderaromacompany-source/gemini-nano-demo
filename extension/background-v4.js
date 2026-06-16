@@ -118,6 +118,19 @@ async function handleBridgeMessage(msg) {
         result = await handleDetectLanguage(msg.text);
         break;
 
+      // ── WebMCP ──
+      case 'webmcp-discover':
+        result = await handleWebMcpDiscover(msg.tabId);
+        break;
+
+      case 'webmcp-call':
+        result = await handleWebMcpCall(msg.tabId, msg.toolName, msg.args);
+        break;
+
+      case 'webmcp-register':
+        result = await handleWebMcpRegister(msg.tabId, msg.tools);
+        break;
+
       default:
         sendToBridge(id, { error: 'Unknown type: ' + type });
         return;
@@ -291,6 +304,90 @@ async function handleDetectLanguage(text) {
   } catch (err) {
     console.error('[BG] LanguageDetector error:', err);
     throw new Error('LanguageDetector API unavailable: ' + err.message);
+  }
+}
+
+// ── WebMCP Handlers ──
+async function handleWebMcpDiscover(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Check if WebMCP is available and tools are registered
+        return {
+          webmcpAvailable: typeof navigator.webMCP !== 'undefined',
+          toolsRegistered: typeof window.WEBMCP_TOOLS !== 'undefined'
+            ? window.WEBMCP_TOOLS.map(t => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters
+              }))
+            : []
+        };
+      }
+    });
+    return results?.[0]?.result || { webmcpAvailable: false, toolsRegistered: [] };
+  } catch (e) {
+    console.error('[BG] WebMCP discover error:', e);
+    return { webmcpAvailable: false, toolsRegistered: [], error: e.message };
+  }
+}
+
+async function handleWebMcpCall(tabId, toolName, args) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (toolName, args) => {
+        return new Promise((resolve, reject) => {
+          const requestId = 'webmcp_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+
+          const handler = (event) => {
+            if (event.source !== window) return;
+            if (event.data.type === 'WEBMCP_RESULT' && event.data.requestId === requestId) {
+              window.removeEventListener('message', handler);
+              if (event.data.error) reject(new Error(event.data.error));
+              else resolve(event.data.result);
+            }
+          };
+          window.addEventListener('message', handler);
+
+          // Timeout after 30s
+          setTimeout(() => {
+            window.removeEventListener('message', handler);
+            reject(new Error('WebMCP call timeout'));
+          }, 30000);
+
+          window.postMessage(
+            { type: 'WEBMCP_CALL', toolName, args, requestId },
+            '*'
+          );
+        });
+      },
+      args: [toolName, args]
+    });
+    return results?.[0]?.result;
+  } catch (e) {
+    console.error('[BG] WebMCP call error:', e);
+    throw new Error('WebMCP call failed: ' + e.message);
+  }
+}
+
+async function handleWebMcpRegister(tabId, tools) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (tools) => {
+        if (typeof navigator.webMCP !== 'undefined' && navigator.webMCP.registerTools) {
+          return navigator.webMCP.registerTools(tools);
+        }
+        throw new Error('WebMCP not available');
+      },
+      args: [tools]
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('[BG] WebMCP register error:', e);
+    throw new Error('WebMCP register failed: ' + e.message);
   }
 }
 

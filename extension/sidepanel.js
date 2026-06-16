@@ -244,6 +244,18 @@ async function sendMessage() {
         return;
     }
 
+    // Handle WebMCP skills
+    if (activeSkill && activeSkill.webmcpAction) {
+        try {
+            const result = await callWebMcpApi(activeSkill.webmcpAction, userText, activeSkill);
+            addMessage('skill', `[🔌 ${activeSkill.name}] ${result}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
     // Regular Prompt API path (no Op)
     let fullPrompt = '';
 
@@ -429,5 +441,73 @@ window.callBrowserApi = async function(action, input) {
     if (data.error) throw new Error(data.error);
     return data.result || JSON.stringify(data);
 };
+
+// ── WebMCP via bridge ──
+window.callWebMcpApi = async function(action, input, skill) {
+    const tabId = await getCurrentTabId();
+    if (!tabId) throw new Error('No active tab');
+
+    if (action === 'discover') {
+        const resp = await fetch('http://localhost:8765/v1/webmcp/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tabId })
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        const tools = data.tools?.toolsRegistered || [];
+        if (tools.length === 0) return 'No WebMCP tools registered on this page. Try a page with WebMCP tools or refresh the page.';
+        return `Found ${tools.length} WebMCP tool(s):\n` + tools.map(t => `  • ${t.name}: ${t.description}`).join('\n');
+    }
+
+    if (action === 'call') {
+        let toolName = skill.webmcpTool;
+        let args = {};
+
+        if (skill.webmcpTool) {
+            // Pre-configured tool (e.g., search_page, extract_links)
+            if (input.trim()) {
+                try { args = JSON.parse(input); }
+                catch {
+                    // For search_page, treat input as query
+                    if (skill.webmcpTool === 'search_page') args = { query: input };
+                    else if (skill.webmcpTool === 'click_element') args = { selector: input };
+                    else throw new Error('Provide JSON arguments or use pre-configured input format');
+                }
+            }
+        } else {
+            // Generic call tool - expect "toolName JSON" or just JSON with toolName in it
+            try {
+                const parsed = JSON.parse(input);
+                if (parsed.toolName) { toolName = parsed.toolName; args = parsed.args || {}; }
+                else throw new Error('toolName required');
+            } catch {
+                const parts = input.trim().split(/\s+/);
+                toolName = parts[0];
+                try { args = JSON.parse(parts.slice(1).join(' ')); } catch { args = {}; }
+            }
+        }
+
+        if (!toolName) throw new Error('Tool name required');
+
+        const resp = await fetch('http://localhost:8765/v1/webmcp/call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tabId, toolName, args })
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        return JSON.stringify(data.result, null, 2);
+    }
+
+    throw new Error('Unknown WebMCP action: ' + action);
+};
+
+async function getCurrentTabId() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        return tab?.id;
+    } catch { return null; }
+}
 
 init();

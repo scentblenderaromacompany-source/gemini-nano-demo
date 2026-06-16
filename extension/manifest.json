@@ -47,11 +47,20 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "skills/registry.js"
+        "skills/registry.js",
+        "webmcp-content.js"
       ],
       "matches": [
         "<all_urls>"
       ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["webmcp-content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ]
 }

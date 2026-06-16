@@ -20,28 +20,30 @@ const BRIDGE_URL = 'http://localhost:8765/v1/chat/completions';
 const SESSION = 'gemini-nano-agent';
 const DEFAULT_MAX_STEPS = 20;
 
-const SYSTEM_PROMPT = `You are a browser automation agent. You control a web browser via accessibility tree snapshots.
+const SYSTEM_PROMPT = `You are a browser automation agent. You control a web browser via accessibility tree snapshots AND WebMCP tools.
 
-Your job: complete the user's task by deciding the next browser action.
+Your job: complete the user's task by deciding the next action.
 
 AVAILABLE ACTIONS (respond with JSON only):
-- {"action": "click", "ref": "@eN"}        — Click element N
+- {"action": "click", "ref": "@eN"}        — Click element by accessibility ref
 - {"action": "fill", "ref": "@eN", "value": "text"} — Clear and fill an input
 - {"action": "type", "ref": "@eN", "value": "text"}  — Type into input (append)
 - {"action": "press", "key": "Enter"}       — Press a keyboard key
 - {"action": "scroll", "direction": "down", "amount": 500} — Scroll page
 - {"action": "navigate", "url": "https://..."} — Go to URL
+- {"action": "webmcp", "tool": "name", "args": {...}} — Call a WebMCP tool on the page
 - {"action": "done", "result": "summary"}   — Task is complete
 - {"action": "stuck", "reason": "why"}      — Cannot proceed
 
 RULES:
 1. Always respond with valid JSON matching one of the actions above
 2. Use refs from the accessibility tree (e.g., @e3, @e12)
-3. After each action, you'll see the updated page state
-4. Prefer clicking links/buttons over typing URLs
-5. If a page needs loading, just say done for this step
-6. If you can't find the right element, try scrolling
-7. Be concise — just the JSON action, no explanation`;
+3. WebMCP tools are semantic page capabilities — prefer them over raw clicks when available
+4. Common WebMCP tools: search_page, extract_links, extract_forms, get_page_metadata, click_element, fill_form, scroll_to
+5. After each action, you'll see the updated page state
+6. If a page needs loading, just say done for this step
+7. If you can't find the right element, try scrolling
+8. Be concise — just the JSON action, no explanation`;
 
 function runAB(...args) {
   const headed = args.includes('--headed');
@@ -167,6 +169,13 @@ function executeAction(action, headed = false) {
       runAB('open', action.url, ...(headed ? ['--headed'] : []));
       sleep(2000);
       return 'ok';
+    case 'webmcp':
+      console.log(`   🔌 Calling WebMCP tool: ${action.tool} with args: ${JSON.stringify(action.args)}`);
+      webmcpCall(action.tool, action.args || {}).then(result => {
+        console.log(`   🔌 WebMCP result: ${JSON.stringify(result).slice(0, 200)}`);
+      }).catch(e => console.log(`   🔌 WebMCP error: ${e.message}`));
+      sleep(1500);
+      return 'ok';
     case 'done':
       console.log(`\n✅ TASK COMPLETE: ${action.result || 'Done'}`);
       return 'done';
@@ -180,6 +189,45 @@ function executeAction(action, headed = false) {
 }
 
 function sleep(ms) { const end = Date.now() + ms; while (Date.now() < end); }
+
+// ── WebMCP Helpers ──
+async function webmcpDiscover() {
+  return new Promise(resolve => {
+    const req = http.request({
+      hostname: 'localhost', port: 8765, path: '/v1/webmcp/discover',
+      method: 'POST', headers: { 'Content-Type': 'application/json' }
+    }, res => {
+      let body = ''; res.on('data', c => body += c);
+      res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve({ tools: [] }); }});
+    });
+    req.on('error', () => resolve({ tools: [] }));
+    req.write(JSON.stringify({ tabId: 1 })); // We'll fix tabId when we have it
+    req.end();
+  });
+}
+
+async function webmcpCall(toolName, args) {
+  return new Promise(resolve => {
+    const req = http.request({
+      hostname: 'localhost', port: 8765, path: '/v1/webmcp/call',
+      method: 'POST', headers: { 'Content-Type': 'application/json' }
+    }, res => {
+      let body = ''; res.on('data', c => body += c);
+      res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve({ error: 'Parse error' }); }});
+    });
+    req.on('error', e => resolve({ error: e.message }));
+    req.write(JSON.stringify({ tabId: 1, toolName, args }));
+    req.end();
+  });
+}
+
+async function discoverWebMcpTools() {
+  // Use bridge's chat completions to run a discover via the extension
+  // For now, we'll use the agent-browser snapshot which includes the page URL
+  // and we'll try to discover tools from there
+  // This is a placeholder - real implementation needs the tabId from the extension
+  return [];
+}
 
 async function checkBridge() {
   return new Promise(resolve => {

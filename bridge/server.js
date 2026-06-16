@@ -249,6 +249,43 @@ app.post('/v1/browser/agent', async (req, res) => {
     }
 });
 
+// ── WebMCP endpoints ──
+app.post('/v1/webmcp/discover', async (req, res) => {
+    const { tabId } = req.body;
+    if (!tabId) return res.status(400).json({ error: 'tabId is required' });
+    try {
+        const result = await sendToChrome('webmcp-discover', { tabId }, 30000);
+        if (result.error) throw new Error(result.error);
+        res.json({ tools: result.tools });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/webmcp/call', async (req, res) => {
+    const { tabId, toolName, args } = req.body;
+    if (!tabId || !toolName) return res.status(400).json({ error: 'tabId and toolName required' });
+    try {
+        const result = await sendToChrome('webmcp-call', { tabId, toolName, args }, 60000);
+        if (result.error) throw new Error(result.error);
+        res.json({ result: result.result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/webmcp/register', async (req, res) => {
+    const { tabId, tools } = req.body;
+    if (!tabId || !tools) return res.status(400).json({ error: 'tabId and tools array required' });
+    try {
+        const result = await sendToChrome('webmcp-register', { tabId, tools }, 10000);
+        if (result.error) throw new Error(result.error);
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ══════════════════════════════════════════════════════════
 // Chrome Communication Layer
 // ══════════════════════════════════════════════════════════
