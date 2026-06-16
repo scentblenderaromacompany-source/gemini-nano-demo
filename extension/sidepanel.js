@@ -26,6 +26,7 @@ async function init() {
 
         status.textContent = 'Loading model...';
         session = await LanguageModel.create({
+            expectedInputs: [{ type: 'text', languages: ['en'] }],
             expectedOutputs: [{ type: 'text', languages: ['en'] }],
             monitor(m) {
                 m.addEventListener('downloadprogress', (e) => {

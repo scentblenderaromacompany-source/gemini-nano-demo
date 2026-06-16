@@ -340,6 +340,7 @@
                 }
 
                 session = await LanguageModel.create({
+                    expectedOutputs: [{ type: 'text', languages: ['en'] }],
                     monitor(m) {
                         m.addEventListener('downloadprogress', (e) => {
                             setStatus(`Downloading model: ${(e.loaded * 100).toFixed(1)}%`, 'loading');
