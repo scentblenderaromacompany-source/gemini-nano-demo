@@ -1,6 +1,6 @@
+#!/usr/bin/env node
 // Gemini Nano Local API Bridge
 // Exposes Chrome's Gemini Nano as an OpenAI-compatible HTTP API
-// so tools like Browser Harness, LangChain, etc. can use it.
 
 import express from 'express';
 import cors from 'cors';
@@ -50,28 +50,32 @@ app.post('/v1/chat/completions', async (req, res) => {
         const completionId = `chatcmpl-${randomUUID()}`;
         const created = Math.floor(Date.now() / 1000);
 
-        const result = await streamToChrome(prompt, (chunk) => {
-            const sseData = JSON.stringify({
+        try {
+            const result = await streamToChrome(prompt, (chunk) => {
+                const sseData = JSON.stringify({
+                    id: completionId,
+                    object: 'chat.completion.chunk',
+                    created,
+                    model: 'gemini-nano',
+                    choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
+                });
+                res.write(`data: ${sseData}\n\n`);
+            });
+
+            const finalData = JSON.stringify({
                 id: completionId,
                 object: 'chat.completion.chunk',
                 created,
                 model: 'gemini-nano',
-                choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
+                choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
             });
-            res.write(`data: ${sseData}\\n\\n`);
-        });
-
-        const finalData = JSON.stringify({
-            id: completionId,
-            object: 'chat.completion.chunk',
-            created,
-            model: 'gemini-nano',
-            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
-        });
-        res.write(`data: ${finalData}\\n\\n`);
-        res.write('data: [DONE]\\n\\n');
-        res.end();
-
+            res.write(`data: ${finalData}\n\n`);
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } catch (err) {
+            res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+            res.end();
+        }
     } else {
         try {
             const result = await promptChrome(prompt, temperature);
@@ -225,11 +229,11 @@ function convertMessages(messages) {
 
     for (const msg of messages) {
         if (msg.role === 'system') {
-            system += msg.content + '\\n\\n';
+            system += msg.content + '\n\n';
         } else if (msg.role === 'user') {
             if (Array.isArray(msg.content)) {
                 const textParts = msg.content.filter(p => p.type === 'text').map(p => p.text);
-                userMessages.push(textParts.join('\\n'));
+                userMessages.push(textParts.join('\n'));
             } else {
                 userMessages.push(msg.content);
             }
@@ -239,8 +243,8 @@ function convertMessages(messages) {
     }
 
     let prompt = '';
-    if (system) prompt += `[System] ${system}\\n`;
-    prompt += userMessages.join('\\n\\n');
+    if (system) prompt += `[System] ${system}\n`;
+    prompt += userMessages.join('\n\n');
     return prompt;
 }
 
@@ -280,7 +284,8 @@ async function screenshotAndAnalyze(tabId, prompt) {
 // ══════════════════════════════════════════════════════════
 
 server.listen(PORT, () => {
-    console.log(`\n╔══════════════════════════════════════════════════════╗
+    console.log(`
+╔══════════════════════════════════════════════════════╗
 ║  Gemini Nano Local API Bridge                       ║
 ║                                                      ║
 ║  HTTP API:   http://localhost:${PORT}/v1              ║

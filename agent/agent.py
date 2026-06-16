@@ -31,7 +31,7 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 
 BRIDGE_URL = "http://localhost:8765"
-AB_CMD = "agent-browser"  # CLI command
+AB_CMD = "/home/bobby/.local/lib/node_modules/agent-browser/bin/agent-browser.js"
 
 AGENT_SYSTEM = """You are a browser automation agent. You control a real Chromium browser via agent-browser commands.
 
