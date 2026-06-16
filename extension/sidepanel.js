@@ -232,6 +232,18 @@ async function sendMessage() {
         return;
     }
 
+    // Handle browser skills (agent-browser via bridge)
+    if (activeSkill && activeSkill.browserAction) {
+        try {
+            const result = await callBrowserApi(activeSkill.browserAction, userText);
+            addMessage('skill', `[🖱️ ${activeSkill.name}] ${result}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
     // Regular Prompt API path (no Op)
     let fullPrompt = '';
 
@@ -377,6 +389,45 @@ window.callBuiltInApi = async function(api, text, options = {}) {
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
     return data.result;
+};
+
+// ── Browser control via bridge (agent-browser) ──
+window.callBrowserApi = async function(action, input) {
+    const endpoints = {
+        'open': '/v1/browser/open',
+        'snapshot': '/v1/browser/snapshot',
+        'click': '/v1/browser/click',
+        'fill': '/v1/browser/fill',
+        'press': '/v1/browser/press',
+        'scroll': '/v1/browser/scroll',
+        'close': '/v1/browser/close',
+        'agent': '/v1/browser/agent',
+    };
+    const endpoint = endpoints[action];
+    if (!endpoint) throw new Error('Unknown browser action: ' + action);
+
+    let body = {};
+    if (action === 'open') body = { url: input };
+    else if (action === 'click') body = { ref: input };
+    else if (action === 'fill') {
+        // Expect "ref value" or JSON
+        try { body = JSON.parse(input); }
+        catch { const [ref, ...rest] = input.split(' '); body = { ref, value: rest.join(' ') }; }
+    }
+    else if (action === 'press') body = { key: input || 'Enter' };
+    else if (action === 'scroll') body = { direction: input || 'down', amount: 500 };
+    else if (action === 'agent') body = { task: input, maxSteps: 20 };
+    else if (action === 'snapshot') body = {};
+    else if (action === 'close') body = {};
+
+    const resp = await fetch(`http://localhost:8765${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    return data.result || JSON.stringify(data);
 };
 
 init();

@@ -282,6 +282,63 @@ Provide the translation only.`,
     mode: 'selection',
   },
 
+  // --- BROWSER (agent-browser via bridge) ---
+  {
+    id: 'browse-navigate',
+    name: 'Navigate',
+    icon: '🧭',
+    description: 'Open a URL in the agent browser (own Chromium instance)',
+    useBuiltInApi: null,
+    browserAction: 'open',
+    mode: 'chat',
+  },
+  {
+    id: 'browse-snapshot',
+    name: 'Snapshot',
+    icon: '📸',
+    description: 'Capture accessibility tree of the current page',
+    useBuiltInApi: null,
+    browserAction: 'snapshot',
+    mode: 'chat',
+  },
+  {
+    id: 'browse-click',
+    name: 'Click',
+    icon: '👆',
+    description: 'Click an element by accessibility ref (e.g. @e3)',
+    useBuiltInApi: null,
+    browserAction: 'click',
+    mode: 'chat',
+  },
+  {
+    id: 'browse-fill',
+    name: 'Fill',
+    icon: '⌨️',
+    description: 'Fill an input field by ref (e.g. @e5 with text)',
+    useBuiltInApi: null,
+    browserAction: 'fill',
+    mode: 'chat',
+  },
+  {
+    id: 'browse-agent',
+    name: 'Auto-Browse',
+    icon: '🤖',
+    description: 'Run a full autonomous browsing task with Gemini Nano as the brain',
+    useBuiltInApi: null,
+    browserAction: 'agent',
+    mode: 'chat',
+    systemPrompt: `You are a browser automation agent. You control a web browser via an accessibility tree.
+Given a task and a page snapshot, respond with ONE of these JSON actions:
+- {"action":"click","ref":"@eN"}  — Click element by ref
+- {"action":"fill","ref":"@eN","value":"text"} — Fill input
+- {"action":"press","key":"Enter"} — Press key
+- {"action":"scroll","direction":"down","amount":500}
+- {"action":"navigate","url":"https://..."}
+- {"action":"done","result":"summary"} — Task complete
+- {"action":"stuck","reason":"why"} — Cannot proceed
+Respond with JSON only. No explanation.`,
+  },
+
   // --- RESEARCH ---
   {
     id: 'fact-check',
@@ -323,6 +380,7 @@ function getAllSkills() {
 function getSkillsByCategory() {
     const categories = {
         '⚡ Built-in': SKILLS.filter(s => s.useBuiltInApi),
+        '🖱️ Browse': SKILLS.filter(s => s.id.startsWith('browse-')),
         '💻 Code': SKILLS.filter(s => s.id.startsWith('code-')),
         '✍️ Writing': SKILLS.filter(s => s.id.startsWith('write-') || s.id === 'proofread' || s.id === 'simplify'),
         '📊 Analysis': SKILLS.filter(s => ['seo-audit', 'security-check', 'a11y-check', 'data-extract', 'summarize-doc', 'compare'].includes(s.id)),

@@ -165,6 +165,90 @@ app.post('/v1/screenshot-analyze', async (req, res) => {
     }
 });
 
+// ── Browser control endpoints (agent-browser) ──
+app.post('/v1/browser/open', async (req, res) => {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'url is required' });
+    try {
+        const result = await runAgentBrowser('open', url);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/browser/snapshot', async (req, res) => {
+    try {
+        const result = await runAgentBrowser('snapshot');
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/browser/click', async (req, res) => {
+    const { ref } = req.body;
+    if (!ref) return res.status(400).json({ error: 'ref (e.g. @e3) is required' });
+    try {
+        const result = await runAgentBrowser('click', ref);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/browser/fill', async (req, res) => {
+    const { ref, value } = req.body;
+    if (!ref || value === undefined) return res.status(400).json({ error: 'ref and value are required' });
+    try {
+        const result = await runAgentBrowser('fill', ref, value);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/browser/press', async (req, res) => {
+    const { key = 'Enter' } = req.body;
+    try {
+        const result = await runAgentBrowser('press', key);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/browser/scroll', async (req, res) => {
+    const { direction = 'down', amount = 500 } = req.body;
+    try {
+        const result = await runAgentBrowser('scroll', direction, String(amount));
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/browser/close', async (req, res) => {
+    try {
+        const result = await runAgentBrowser('close', '--all');
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Autonomously run a browsing task (agent loop on the bridge side)
+app.post('/v1/browser/agent', async (req, res) => {
+    const { task, maxSteps = 20 } = req.body;
+    if (!task) return res.status(400).json({ error: 'task is required' });
+    try {
+        const result = await browserAgentLoop(task, maxSteps);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ══════════════════════════════════════════════════════════
 // Chrome Communication Layer
 // ══════════════════════════════════════════════════════════
@@ -279,6 +363,129 @@ async function screenshotAndAnalyze(tabId, prompt) {
     return response.result;
 }
 
+// ── agent-browser runner ──
+import { execSync } from 'child_process';
+
+const AGENT_BROWSER_BIN = process.env.AGENT_BROWSER_BIN ||
+    '/home/bobby/.local/lib/node_modules/agent-browser/bin/agent-browser.js';
+const AB_SESSION = 'gemini-nano-bridge';
+
+function runAgentBrowser(...args) {
+    const cmd = [AGENT_BROWSER_BIN, '--session', AB_SESSION, '--json', ...args.map(String)];
+    try {
+        const out = execSync(cmd.join(' '), {
+            timeout: 30000,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        if (out.trim()) {
+            try { return JSON.parse(out); }
+            catch { return { raw: out.trim() }; }
+        }
+        return { ok: true };
+    } catch (e) {
+        const stdout = e.stdout?.toString().trim();
+        if (stdout) {
+            try { return JSON.parse(stdout); } catch { return { raw: stdout }; }
+        }
+        throw new Error(e.stderr?.toString().trim() || e.message);
+    }
+}
+
+// ── Browser agent loop (bridge-side) ──
+const BROWSER_AGENT_SYSTEM = `You are a browser automation agent. You control a web browser via accessibility tree snapshots.
+Given a task and a page snapshot, respond with ONE of these JSON actions:
+- {"action":"click","ref":"@eN"}  — Click element by ref
+- {"action":"fill","ref":"@eN","value":"text"} — Fill input
+- {"action":"press","key":"Enter"} — Press key
+- {"action":"scroll","direction":"down","amount":500}
+- {"action":"navigate","url":"https://..."}
+- {"action":"done","result":"summary"} — Task complete
+- {"action":"stuck","reason":"why"} — Cannot proceed
+Respond with JSON only. No explanation.`;
+
+async function browserAgentLoop(task, maxSteps = 20) {
+    const steps = [];
+
+    // Start: open a blank page so snapshot works
+    try { runAgentBrowser('open', 'about:blank'); } catch {}
+
+    let messages = [
+        { role: 'system', content: BROWSER_AGENT_SYSTEM },
+        { role: 'user', content: `Task: ${task}\n\nRespond with your first action as JSON.` },
+    ];
+
+    for (let step = 0; step < maxSteps; step++) {
+        // Snapshot the page
+        let pageContext;
+        try {
+            const snap = runAgentBrowser('snapshot');
+            const data = snap.data || snap;
+            const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+            const tree = parsed.tree || parsed.snapshot || JSON.stringify(parsed);
+            const url = parsed.url || 'unknown';
+            pageContext = `URL: ${url}\n${tree}`;
+        } catch {
+            pageContext = 'Could not get page snapshot.';
+        }
+
+        if (pageContext.length > 5000) pageContext = pageContext.slice(0, 5000) + '... (truncated)';
+        messages.push({ role: 'user', content: `Current page:\n${pageContext}` });
+
+        // Ask Gemini Nano
+        const response = await promptChrome(
+            convertMessages(messages), 0.3
+        );
+        messages.push({ role: 'assistant', content: response });
+
+        // Parse action
+        let action;
+        try {
+            const start = response.indexOf('{');
+            const end = response.lastIndexOf('}') + 1;
+            action = JSON.parse(response.slice(start, end));
+        } catch {
+            action = { action: 'stuck', reason: `Could not parse: ${response.slice(0, 200)}` };
+        }
+
+        steps.push({ step, action, response: response.slice(0, 200) });
+
+        // Execute action
+        const act = action.action;
+        if (act === 'done') {
+            return { completed: true, result: action.result, steps };
+        }
+        if (act === 'stuck') {
+            return { completed: false, reason: action.reason, steps };
+        }
+        if (act === 'click') {
+            runAgentBrowser('click', action.ref || '');
+            await sleep(1000);
+        } else if (act === 'fill') {
+            runAgentBrowser('fill', action.ref || '', action.value || '');
+            await sleep(500);
+        } else if (act === 'press') {
+            runAgentBrowser('press', action.key || 'Enter');
+            await sleep(1000);
+        } else if (act === 'scroll') {
+            runAgentBrowser('scroll', action.direction || 'down', String(action.amount || 500));
+            await sleep(500);
+        } else if (act === 'navigate') {
+            runAgentBrowser('open', action.url || '');
+            await sleep(2000);
+        }
+
+        // Trim history
+        if (messages.length > 14) {
+            messages = [messages[0], ...messages.slice(-12)];
+        }
+    }
+
+    return { completed: false, reason: 'Max steps reached', steps };
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 // ══════════════════════════════════════════════════════════
 // Start Server
 // ══════════════════════════════════════════════════════════
@@ -302,6 +509,16 @@ server.listen(PORT, () => {
 ║  POST /v1/summarize                                  ║
 ║  POST /v1/translate                                  ║
 ║  POST /v1/detect-language                            ║
+║                                                      ║
+║  Browser Control (agent-browser):                    ║
+║  POST /v1/browser/open     - Navigate to URL         ║
+║  POST /v1/browser/snapshot - Get accessibility tree  ║
+║  POST /v1/browser/click    - Click element by ref    ║
+║  POST /v1/browser/fill    - Fill input by ref        ║
+║  POST /v1/browser/press   - Press keyboard key       ║
+║  POST /v1/browser/scroll  - Scroll page              ║
+║  POST /v1/browser/close   - Close browser session    ║
+║  POST /v1/browser/agent   - Run autonomous task       ║
 ║                                                      ║
 ║  Waiting for Chrome extension to connect via WS...   ║
 ╚══════════════════════════════════════════════════════╝`);
