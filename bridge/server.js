@@ -231,6 +231,12 @@ app.post('/v1/analyze-image', async (req, res) => {
 app.post('/v1/summarize', async (req, res) => {
     const { text, type = 'key-points' } = req.body;
     if (!text) return res.status(400).json({ error: 'text is required' });
+    
+    const validTypes = ['tldr', 'key-points', 'teaser', 'headline'];
+    if (!validTypes.includes(type)) {
+        return res.status(400).json({ error: `Invalid summary type: ${type}. Valid: ${validTypes.join(', ')}` });
+    }
+    
     try {
         const result = await builtInApi('summarizer', text, { type });
         res.json({ result });
@@ -243,6 +249,12 @@ app.post('/v1/summarize', async (req, res) => {
 app.post('/v1/translate', async (req, res) => {
     const { text, targetLanguage = 'es' } = req.body;
     if (!text) return res.status(400).json({ error: 'text is required' });
+    
+    const validLanguages = ['en', 'es', 'fr', 'de', 'ja', 'zh', 'ko', 'it', 'pt', 'ru', 'ar'];
+    if (!validLanguages.includes(targetLanguage)) {
+        return res.status(400).json({ error: `Invalid language: ${targetLanguage}. Valid: ${validLanguages.join(', ')}` });
+    }
+    
     try {
         const result = await builtInApi('translator', text, { targetLanguage });
         res.json({ result });

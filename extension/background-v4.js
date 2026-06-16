@@ -342,8 +342,10 @@ async function captureScreenshot(tabId) {
 // ── Built-in Chrome AI APIs ──
 async function handleSummarize(text, summaryType) {
   try {
+    const validTypes = ['tldr', 'key-points', 'teaser', 'headline'];
+    const type = validTypes.includes(summaryType) ? summaryType : 'key-points';
     const summarizer = await Summarizer.create({
-      type: summaryType || 'key-points',
+      type,
       format: 'plain-text',
       length: 'medium',
     });
@@ -356,9 +358,11 @@ async function handleSummarize(text, summaryType) {
 
 async function handleTranslate(text, targetLanguage) {
   try {
+    const lang = targetLanguage || 'es';
+    console.log('[BG] Translate request:', { text: text.substring(0, 50), targetLanguage: lang });
     const translator = await Translator.create({
       sourceLanguage: null,
-      targetLanguage: targetLanguage || 'es',
+      targetLanguage: lang,
     });
     return await translator.translate(text);
   } catch (err) {
