@@ -20,14 +20,49 @@ app.use(express.json({ limit: '50mb' }));
 // ── Health check ──
 app.get('/health', (req, res) => {
     const available = getAvailableModels();
+    const isConnected = chromeWs && chromeWs.readyState === 1;
     res.json({ 
         status: 'ok', 
         model: 'gemini-nano', 
         backend: 'chrome-bridge',
         hybrid: true,
+        extensionConnected: isConnected,
         availableModels: available.map(m => m.id),
         cloudProviders: cloudClient.getAvailableProviders().map(p => p.id),
     });
+});
+
+// ── Detailed status ──
+app.get('/status', (req, res) => {
+    const isConnected = chromeWs && chromeWs.readyState === 1;
+    res.json({
+        bridge: {
+            status: 'running',
+            port: PORT,
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+        },
+        extension: {
+            connected: isConnected,
+            wsReadyState: chromeWs?.readyState,
+        },
+        models: {
+            local: getAvailableModels().map(m => m.id),
+            cloud: cloudClient.getAvailableProviders().map(p => p.id),
+        },
+        hybrid: HYBRID_CONFIG,
+    });
+});
+
+// ── Test built-in AI ──
+app.post('/v1/test/built-in', async (req, res) => {
+    const { api = 'detect-language', text = 'Test text' } = req.body;
+    try {
+        const result = await builtInApi(api, text);
+        res.json({ success: true, result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // ── OpenAI-compatible: List models (hybrid) ──
