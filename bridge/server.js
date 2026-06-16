@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // Gemini Nano Local API Bridge
 // Exposes Chrome's Gemini Nano as an OpenAI-compatible HTTP API
+// Hybrid AI: on-device Nano + cloud Gemini with auto-failover
 
 import express from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import { randomUUID } from 'crypto';
+import { HYBRID_CONFIG, selectModel, estimateComplexity, getAvailableModels, getModelById } from './hybrid-config.js';
+import { cloudClient } from './cloud-providers.js';
 
 const app = express();
 const PORT = process.env.PORT || 8765;
@@ -16,31 +19,115 @@ app.use(express.json({ limit: '50mb' }));
 
 // ── Health check ──
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', model: 'gemini-nano', backend: 'chrome-bridge' });
+    const available = getAvailableModels();
+    res.json({ 
+        status: 'ok', 
+        model: 'gemini-nano', 
+        backend: 'chrome-bridge',
+        hybrid: true,
+        availableModels: available.map(m => m.id),
+        cloudProviders: cloudClient.getAvailableProviders().map(p => p.id),
+    });
 });
 
-// ── OpenAI-compatible: List models ──
+// ── OpenAI-compatible: List models (hybrid) ──
 app.get('/v1/models', (req, res) => {
-    res.json({
-        object: 'list',
-        data: [{
-            id: 'gemini-nano',
-            object: 'model',
-            owned_by: 'chrome',
-            permission: []
-        }]
+    const models = [];
+    
+    // Local models
+    for (const tier of HYBRID_CONFIG.tiers) {
+        if (tier.provider === 'local') {
+            const available = tier.availability();
+            models.push({
+                id: tier.id,
+                object: 'model',
+                owned_by: 'chrome',
+                permission: [],
+                available,
+                capabilities: tier.capabilities,
+                maxTokens: tier.maxTokens,
+                costPer1k: tier.costPer1k,
+            });
+        }
+    }
+    
+    // Cloud models (if API keys available)
+    for (const tier of HYBRID_CONFIG.tiers) {
+        if (tier.provider === 'cloud' && process.env[tier.apiKeyEnv]) {
+            models.push({
+                id: tier.id,
+                object: 'model',
+                owned_by: 'google',
+                permission: [],
+                available: true,
+                capabilities: tier.capabilities,
+                maxTokens: tier.maxTokens,
+                costPer1k: tier.costPer1k,
+            });
+        }
+    }
+    
+    // Auto model
+    models.push({
+        id: 'auto',
+        object: 'model',
+        owned_by: 'hybrid',
+        permission: [],
+        available: true,
+        capabilities: ['auto-select', 'failover'],
+        description: 'Automatically selects best model based on task complexity',
     });
+    
+    res.json({ object: 'list', data: models });
 });
 
 // ── OpenAI-compatible: Chat completions ──
 app.post('/v1/chat/completions', async (req, res) => {
-    const { messages, stream = false, temperature = 0.7, max_tokens = 1024 } = req.body;
+    const { messages, stream = false, temperature = 0.7, max_tokens = 1024, model = 'auto' } = req.body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: 'messages array is required' });
     }
 
+    // Hybrid model selection
+    const selectedModel = model === 'auto' 
+        ? selectModel(messages.map(m => m.content).join(' '), 'auto', { tokens: max_tokens })
+        : getModelById(model) || selectModel(' ', model);
+    
+    const useCloud = selectedModel.provider === 'cloud';
+    const modelId = useCloud ? selectedModel.id : 'gemini-nano';
+
+    console.log(`[Hybrid] Request model: ${model} → selected: ${modelId} (${selectedModel.provider})`);
+
+    // Build prompt for non-streaming
     const prompt = convertMessages(messages);
+
+    const makeRequest = async (modelToUse) => {
+        const m = getModelById(modelToUse) || HYBRID_CONFIG.tiers[0];
+        if (m.provider === 'cloud') {
+            return await cloudClient.chat('google', m.id, {
+                messages,
+                temperature,
+                max_tokens: Math.min(max_tokens, m.maxTokens),
+            }, { timeout: 180000 });
+        } else {
+            // Local via bridge WebSocket
+            if (stream) {
+                return await streamToChrome(prompt, (chunk) => {
+                    const sseData = JSON.stringify({
+                        id: completionId,
+                        object: 'chat.completion.chunk',
+                        created,
+                        model: modelToUse,
+                        choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
+                    });
+                    res.write(`data: ${sseData}\n\n`);
+                });
+            } else {
+                return { result: await promptChrome(prompt, temperature) };
+            }
+        }
+    };
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
@@ -51,49 +138,72 @@ app.post('/v1/chat/completions', async (req, res) => {
         const created = Math.floor(Date.now() / 1000);
 
         try {
-            const result = await streamToChrome(prompt, (chunk) => {
-                const sseData = JSON.stringify({
-                    id: completionId,
-                    object: 'chat.completion.chunk',
-                    created,
-                    model: 'gemini-nano',
-                    choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
-                });
-                res.write(`data: ${sseData}\n\n`);
-            });
-
+            // For streaming, we only support local (Nano) currently
+            const result = await makeRequest(modelId);
             const finalData = JSON.stringify({
                 id: completionId,
                 object: 'chat.completion.chunk',
                 created,
-                model: 'gemini-nano',
+                model: modelId,
                 choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
             });
             res.write(`data: ${finalData}\n\n`);
             res.write('data: [DONE]\n\n');
             res.end();
         } catch (err) {
-            res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-            res.end();
+            console.error('[Hybrid] Stream error:', err);
+            // Try failover to local if cloud failed
+            if (useCloud && HYBRID_CONFIG.failover.onError) {
+                console.log('[Hybrid] Failover to local Nano...');
+                try {
+                    const result = await makeRequest('gemini-nano');
+                    res.write('data: [DONE]\n\n');
+                    res.end();
+                } catch (e) {
+                    res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+                    res.end();
+                }
+            } else {
+                res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+                res.end();
+            }
         }
     } else {
-        try {
-            const result = await promptChrome(prompt, temperature);
-            res.json({
-                id: `chatcmpl-${randomUUID()}`,
-                object: 'chat.completion',
-                created: Math.floor(Date.now() / 1000),
-                model: 'gemini-nano',
-                choices: [{
-                    index: 0,
-                    message: { role: 'assistant', content: result },
-                    finish_reason: 'stop'
-                }],
-                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-            });
-        } catch (err) {
-            res.status(500).json({ error: err.message });
+        // Non-streaming with failover
+        let lastError;
+        for (let attempt = 0; attempt <= HYBRID_CONFIG.failover.maxRetries; attempt++) {
+            try {
+                const result = await makeRequest(modelId);
+                res.json({
+                    id: `chatcmpl-${randomUUID()}`,
+                    object: 'chat.completion',
+                    created: Math.floor(Date.now() / 1000),
+                    model: modelId,
+                    choices: [{
+                        index: 0,
+                        message: { role: 'assistant', content: useCloud ? result.choices[0].message.content : result.result },
+                        finish_reason: useCloud ? result.choices[0].finish_reason : 'stop'
+                    }],
+                    usage: useCloud ? result.usage : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+                });
+                return;
+            } catch (err) {
+                lastError = err;
+                console.error(`[Hybrid] Attempt ${attempt + 1} failed (${modelId}):`, err.message);
+                
+                // Failover logic
+                if (attempt < HYBRID_CONFIG.failover.maxRetries) {
+                    if (useCloud && (HYBRID_CONFIG.failover.onError || HYBRID_CONFIG.failover.onUnavailable)) {
+                        console.log('[Hybrid] Failover to local Nano...');
+                        modelId = 'gemini-nano';
+                        useCloud = false;
+                        await new Promise(r => setTimeout(r, HYBRID_CONFIG.failover.retryDelayMs));
+                        continue;
+                    }
+                }
+            }
         }
+        res.status(500).json({ error: `All models failed. Last error: ${lastError.message}` });
     }
 });
 

@@ -5,6 +5,7 @@ let session = null;
 let mode = 'chat';
 let activeSkill = null;
 let conversationHistory = [];
+let currentModel = 'auto'; // Hybrid AI model selection
 
 // --- Init ---
 async function init() {
@@ -269,53 +270,44 @@ async function sendMessage() {
         return;
     }
 
-    // Regular Prompt API path (no Op)
-    let fullPrompt = '';
-
-    // 1. System prompt from skill
-    if (activeSkill) {
-        fullPrompt += `[System: ${activeSkill.systemPrompt}]\n\n`;
+    // Handle Hybrid AI skills (model selection)
+    if (activeSkill && activeSkill.hybridModel) {
+        currentModel = activeSkill.hybridModel;
+        addMessage('skill', `[🔀 ${activeSkill.name}] Model set to: ${currentModel}`);
+        btn.disabled = false;
+        return;
     }
 
-    // 2. Context based on mode + skill
-    let context = '';
-    if (activeSkill && (activeSkill.mode === 'page' || activeSkill.mode === 'selection' || activeSkill.mode === 'selection-or-page')) {
-        context = await getContextForSkill(activeSkill);
-    } else if (mode === 'page') {
-        context = await getPageText();
-    } else if (mode === 'selection') {
-        context = await getSelection();
-    }
-
-    if (context) {
-        fullPrompt += `Context:\n---\n${context}\n---\n\n`;
-    }
-
-    // 3. User's instruction
-    fullPrompt += userText;
-
-    // Add to conversation history
-    conversationHistory.push({ role: 'user', content: fullPrompt });
-    if (conversationHistory.length > 10) {
-        conversationHistory = conversationHistory.slice(-10);
-    }
-
-    // Stream response
-    const aiMsg = addMessage('ai', '');
-
+    // Hybrid AI path: call bridge with model selection
     try {
-        const stream = session.promptStreaming(conversationHistory, { outputLanguage: 'en' });
-        for await (const chunk of stream) {
-            aiMsg.textContent += chunk;
-            document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
-        }
-        conversationHistory.push({ role: 'assistant', content: aiMsg.textContent });
+        const aiMsg = addMessage('ai', '');
+        
+        const response = await fetch('http://localhost:8765/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                messages: conversationHistory.concat({ role: 'user', content: userText }),
+                stream: false,
+                temperature: 0.7,
+                max_tokens: 1024,
+                model: currentModel,
+            })
+        });
+        
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        
+        const result = data.choices?.[0]?.message?.content || 'No response';
+        aiMsg.textContent = result;
+        conversationHistory.push({ role: 'assistant', content: result });
+        
     } catch (err) {
         aiMsg.textContent = `Error: ${err.message}`;
     }
 
     btn.disabled = false;
 }
+
 
 // --- UI ---
 function setMode(el) {
