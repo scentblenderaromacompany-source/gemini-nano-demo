@@ -3,6 +3,7 @@
 // Exposes Chrome's Gemini Nano as an OpenAI-compatible HTTP API
 // Hybrid AI: on-device Nano + cloud Gemini with auto-failover
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
@@ -10,6 +11,10 @@ import http from 'http';
 import { randomUUID } from 'crypto';
 import { HYBRID_CONFIG, selectModel, estimateComplexity, getAvailableModels, getModelById } from './hybrid-config.js';
 import { cloudClient } from './cloud-providers.js';
+
+// Debug: Check if env vars are loaded
+console.log('[Server] GEMINI_API_KEY loaded:', process.env.GEMINI_API_KEY ? 'YES' : 'NO');
+console.log('[Server] MEM0_API_KEY loaded:', process.env.MEM0_API_KEY ? 'YES' : 'NO');
 
 const app = express();
 const PORT = process.env.PORT || 8765;
