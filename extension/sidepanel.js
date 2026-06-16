@@ -302,6 +302,18 @@ async function sendMessage() {
         return;
     }
 
+    // Handle DevTools skills
+    if (activeSkill && activeSkill.devtoolsAction) {
+        try {
+            const result = await callDevToolsApi(activeSkill.devtoolsAction, userText);
+            addMessage('skill', `[🔧 ${activeSkill.name}] ${result}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
     // Hybrid AI path: call bridge with model selection
     try {
         const aiMsg = addMessage('ai', '');
@@ -671,6 +683,69 @@ window.callWorkflowApi = async function(action, input) {
     if (action === 'templates') return JSON.stringify(data.templates, null, 2);
     if (action === 'status') return JSON.stringify(data.run, null, 2);
     if (data.workflow) return JSON.stringify(data.workflow, null, 2);
+    if (data.result) return JSON.stringify(data.result, null, 2);
+
+    return JSON.stringify(data, null, 2);
+};
+
+// ── DevTools API ──
+window.callDevToolsApi = async function(action, input) {
+    const endpoints = {
+        'start': '/v1/devtools/start',
+        'stop': '/v1/devtools/stop',
+        'performance': '/v1/devtools/performance',
+        'network': '/v1/devtools/network',
+        'console': '/v1/devtools/console',
+        'lighthouse': '/v1/devtools/lighthouse',
+        'screenshot': '/v1/devtools/screenshot',
+        'evaluate': '/v1/devtools/evaluate',
+        'metrics': '/v1/devtools/metrics',
+    };
+    const endpoint = endpoints[action];
+    if (!endpoint) throw new Error('Unknown devtools action: ' + action);
+
+    let body = {}, method = 'POST';
+    if (action === 'start') {
+        try { body = JSON.parse(input); }
+        catch { body = { headless: true, autoConnect: true }; }
+    } else if (action === 'performance') {
+        try { body = JSON.parse(input); }
+        catch { body = { duration: 5000, categories: ['loading', 'scripting', 'rendering'] }; }
+    } else if (action === 'network') {
+        try { body = JSON.parse(input); }
+        catch { body = { includeBody: false }; }
+    } else if (action === 'console') {
+        try { body = JSON.parse(input); }
+        catch { body = { level: 'all', limit: 100 }; }
+    } else if (action === 'lighthouse') {
+        try { body = JSON.parse(input); }
+        catch { body = { url: input, categories: ['performance', 'accessibility', 'best-practices', 'seo'] }; }
+    } else if (action === 'screenshot') {
+        try { body = JSON.parse(input); }
+        catch { body = { format: 'png', quality: 80 }; }
+    } else if (action === 'evaluate') {
+        try { body = JSON.parse(input); }
+        catch { body = { expression: input, awaitPromise: true, returnByValue: true }; }
+    } else if (action === 'metrics') {
+        method = 'POST';
+    } else if (action === 'stop') {
+        method = 'POST';
+    }
+
+    const resp = await fetch(`http://localhost:8765${endpoint}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: method === 'POST' ? JSON.stringify(body) : undefined
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+
+    if (action === 'performance') return JSON.stringify(data.result, null, 2);
+    if (action === 'network') return JSON.stringify(data.result, null, 2);
+    if (action === 'console') return JSON.stringify(data.result, null, 2);
+    if (action === 'lighthouse') return JSON.stringify(data.result, null, 2);
+    if (action === 'evaluate') return JSON.stringify(data.result, null, 2);
+    if (action === 'metrics') return JSON.stringify(data.result, null, 2);
     if (data.result) return JSON.stringify(data.result, null, 2);
 
     return JSON.stringify(data, null, 2);

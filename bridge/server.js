@@ -954,6 +954,101 @@ async function browserAgentLoop(task, maxSteps = 20) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ── DevTools MCP endpoints ──
+import { getDevToolsClient } from './devtools-mcp-client.js';
+
+app.post('/v1/devtools/start', async (req, res) => {
+    try {
+        const options = req.body || {};
+        const client = await getDevToolsClient(options);
+        res.json({ status: 'started', initialized: client.initialized });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/stop', async (req, res) => {
+    try {
+        const { devToolsClient } = await import('./devtools-mcp-client.js');
+        if (devToolsClient) {
+            await devToolsClient.stop();
+        }
+        res.json({ status: 'stopped' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/performance', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.getPerformanceTrace(req.body);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/network', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.getNetworkRequests(req.body);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/console', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.getConsoleLogs(req.body);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/lighthouse', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.runLighthouseAudit(req.body);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/screenshot', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.takeScreenshot(req.body);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/evaluate', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.evaluateJavaScript(req.body.expression, req.body);
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/devtools/metrics', async (req, res) => {
+    try {
+        const client = await getDevToolsClient();
+        const result = await client.getPageMetrics();
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ══════════════════════════════════════════════════════════
 // Start Server
 // ══════════════════════════════════════════════════════════
