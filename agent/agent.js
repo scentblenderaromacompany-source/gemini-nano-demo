@@ -1,27 +1,25 @@
 #!/usr/bin/env node
 /**
  * Gemini Nano Browser Agent (Node.js)
- * ====================================
  * Autonomous browser agent powered by Chrome's on-device Gemini Nano.
  * Uses agent-browser for browser control + Gemini Nano bridge for reasoning.
  *
  * Usage:
  *   node agent.js "Find AI news on Hacker News"
- *   node agent.js "Search wikipedia for quantum computing" --headed
+ *   node agent.js "Search Wikipedia for quantum computing" --headed
  *   node agent.js "Fill out contact form on example.com" --max-steps 15
  */
 
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
 import http from 'http';
-import fs from 'fs';
 
 const AGENT_BROWSER = process.env.AGENT_BROWSER_BIN ||
   '/home/bobby/.local/lib/node_modules/agent-browser/bin/agent-browser.js';
 const BRIDGE_URL = 'http://localhost:8765/v1/chat/completions';
 const SESSION = 'gemini-nano-agent';
 const DEFAULT_MAX_STEPS = 20;
-
-let lastScreenshot = null;
+const REQUEST_TIMEOUT = 120000; // 2 minutes for chat completions
+const ACTION_TIMEOUT = 60000;   // 1 minute for agent-browser actions
 
 const SYSTEM_PROMPT = `You are a browser automation agent. You control a web browser via accessibility tree snapshots AND WebMCP tools AND vision (screenshots).
 
@@ -52,46 +50,35 @@ RULES:
 9. Be concise — just the JSON action, no explanation`;
 
 function runAB(...args) {
-  const headed = args.includes('--headed');
-  const cleanArgs = args.filter(a => a !== '--headed');
-  const cmd = [AGENT_BROWSER, '--session', SESSION, '--json'];
-  if (headed) cmd.push('--headed');
-  cmd.push(...cleanArgs.map(String));
+  return new Promise((resolve, reject) => {
+    const headed = args.includes('--headed');
+    const cleanArgs = args.filter(a => a !== '--headed');
+    const cmdArgs = [AGENT_BROWSER, '--session', SESSION, '--json', ...cleanArgs.map(String)];
+    if (headed) cmdArgs.push('--headed');
 
-  try {
-    const out = execSync(cmd.join(' '), {
-      timeout: 30000,
+    const child = execFile(AGENT_BROWSER, ['--session', SESSION, '--json', ...cleanArgs], {
+      timeout: 60000,
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 1024 * 1024 * 10, // 10MB
+    }, (error, stdout, stderr) => {
+      if (error) {
+        if (stdout) {
+          try { return resolve(JSON.parse(stdout)); } catch { return resolve({ raw: stdout.trim() }); }
+        }
+        return reject(new Error(stderr?.trim() || error.message));
+      }
+      if (stdout.trim()) {
+        try { resolve(JSON.parse(stdout)); }
+        catch { resolve({ raw: stdout.trim() }); }
+      } else {
+        resolve({ ok: true });
+      }
     });
-    if (out.trim()) {
-      try { return JSON.parse(out); } catch { return { raw: out.trim() }; }
-    }
-    return {};
-  } catch (e) {
-    const stderr = e.stderr?.toString().trim();
-    const stdout = e.stdout?.toString().trim();
-    if (stdout) {
-      try { return JSON.parse(stdout); } catch { return { raw: stdout }; }
-    }
-    return { error: stderr || e.message };
-  }
+  });
 }
 
 function getSnapshot(headed = false) {
-  const result = runAB('snapshot', ...(headed ? ['--headed'] : []));
-  if (result.error) return null, result.error;
-
-  const data = result.data;
-  if (!data) return null, JSON.stringify(result);
-
-  const parsed = typeof data === 'string' ? safeParse(data) : data;
-  if (!parsed) return null, String(data);
-
-  const tree = parsed.tree || parsed.snapshot || '';
-  const url = parsed.url || 'unknown';
-  const title = parsed.title || 'untitled';
-  return tree, `URL: ${url}\nTitle: ${title}\n\n${tree}`;
+  return runAB('snapshot', ...(headed ? ['--headed'] : []));
 }
 
 function safeParse(str) {
@@ -106,8 +93,8 @@ function geminiChat(messages, temperature = 0.3) {
     max_tokens: 256,
   });
 
-  return new Promise((resolve, reject) => {
-    const url = new URL(BRIDGE_URL);
+  return new Promise((resolve) => {
+    const url = new URL('http://localhost:8765/v1/chat/completions');
     const req = http.request({
       hostname: url.hostname,
       port: url.port,
@@ -129,14 +116,13 @@ function geminiChat(messages, temperature = 0.3) {
     });
     req.on('error', e => resolve(`{"action": "stuck", "reason": "Bridge error: ${e.message}"}`));
     req.on('timeout', () => { req.destroy(); resolve('{"action": "stuck", "reason": "Bridge timeout"}'); });
-    req.write(payload);
+    req.write(JSON.stringify({ model: 'gemini-nano', messages, temperature: 0.3, max_tokens: 256 }));
     req.end();
   });
 }
 
 function parseAction(text) {
   let t = text.trim();
-  // Strip markdown code fences
   if (t.startsWith('```')) {
     t = t.split('\n').filter(l => !l.startsWith('```')).join('\n').trim();
   }
@@ -148,55 +134,62 @@ function parseAction(text) {
   return { action: 'stuck', reason: `Could not parse: ${t.slice(0, 200)}` };
 }
 
-function executeAction(action, headed = false) {
+async function sleep(ms) {
+  await new Promise(r => setTimeout(r, ms));
+}
+
+async function executeAction(action, headed = false) {
   const act = action.action;
-  // Make async for screenshot and vision cases
   const asyncCases = ['screenshot', 'vision'];
   if (asyncCases.includes(act)) {
     return executeActionAsync(action, headed);
   }
 
-  switch (act) {
-    case 'click':
-      runAB('click', action.ref, ...(headed ? ['--headed'] : []));
-      sleep(1000);
-      return 'ok';
-    case 'fill':
-      runAB('fill', action.ref, action.value || '', ...(headed ? ['--headed'] : []));
-      sleep(500);
-      return 'ok';
-    case 'type':
-      runAB('type', action.ref, action.value || '', ...(headed ? ['--headed'] : []));
-      sleep(300);
-      return 'ok';
-    case 'press':
-      runAB('press', action.key || 'Enter', ...(headed ? ['--headed'] : []));
-      sleep(1000);
-      return 'ok';
-    case 'scroll':
-      runAB('scroll', action.direction || 'down', String(action.amount || 500), ...(headed ? ['--headed'] : []));
-      sleep(500);
-      return 'ok';
-    case 'navigate':
-      runAB('open', action.url, ...(headed ? ['--headed'] : []));
-      sleep(2000);
-      return 'ok';
-    case 'webmcp':
-      console.log(`   🔌 Calling WebMCP tool: ${action.tool} with args: ${JSON.stringify(action.args)}`);
-      webmcpCall(action.tool, action.args || {}).then(result => {
+  try {
+    switch (action.action) {
+      case 'click':
+        await runAB('click', action.ref, ...(headed ? ['--headed'] : []));
+        await sleep(1000);
+        return 'ok';
+      case 'fill':
+        await runAB('fill', action.ref, action.value || '', ...(headed ? ['--headed'] : []));
+        await sleep(500);
+        return 'ok';
+      case 'type':
+        await runAB('type', action.ref, action.value || '', ...(headed ? ['--headed'] : []));
+        await sleep(300);
+        return 'ok';
+      case 'press':
+        await runAB('press', action.key || 'Enter', ...(headed ? ['--headed'] : []));
+        await sleep(1000);
+        return 'ok';
+      case 'scroll':
+        await runAB('scroll', action.direction || 'down', String(action.amount || 500), ...(headed ? ['--headed'] : []));
+        await sleep(500);
+        return 'ok';
+      case 'navigate':
+        await runAB('open', action.url, ...(headed ? ['--headed'] : []));
+        await sleep(2000);
+        return 'ok';
+      case 'webmcp':
+        console.log(`   🔌 Calling WebMCP tool: ${action.tool} with args: ${JSON.stringify(action.args)}`);
+        const result = await webmcpCall(action.tool, action.args || {});
         console.log(`   🔌 WebMCP result: ${JSON.stringify(result).slice(0, 200)}`);
-      }).catch(e => console.log(`   🔌 WebMCP error: ${e.message}`));
-      sleep(1500);
-      return 'ok';
-    case 'done':
-      console.log(`\n✅ TASK COMPLETE: ${action.result || 'Done'}`);
-      return 'done';
-    case 'stuck':
-      console.log(`\n❌ STUCK: ${action.reason || 'Unknown'}`);
-      return 'stuck';
-    default:
-      console.log(`\n⚠️ Unknown: ${act}`);
-      return 'unknown';
+        await sleep(1500);
+        return 'ok';
+      case 'done':
+        console.log(`\n✅ TASK COMPLETE: ${action.result || 'Done'}`);
+        return 'done';
+      case 'stuck':
+        console.log(`\n❌ STUCK: ${action.reason || 'Unknown'}`);
+        return 'stuck';
+      default:
+        console.log(`\n⚠️ Unknown: ${act}`);
+        return 'unknown';
+    }
+  } catch (error) {
+    console.log(`   ⚠️ Action error: ${error.message}`);
+    return { error: error.message };
   }
 }
 
@@ -208,14 +201,13 @@ async function executeActionAsync(action, headed = false) {
       const shot = await takeScreenshot(action.annotate !== false);
       console.log(`   📸 Screenshot result: ${JSON.stringify(shot).slice(0, 200)}`);
       lastScreenshot = shot;
-      sleep(1000);
+      await sleep(1000);
       return 'ok';
     case 'vision':
       if (!action.image && !lastScreenshot) {
         console.log(`   👁️ Vision: No image provided and no recent screenshot`);
         return 'ok';
       }
-      // Use actual base64 from lastScreenshot if action.image is placeholder
       let imageData = action.image;
       if (action.image === 'base64' || !action.image) {
         imageData = lastScreenshot?.base64 || lastScreenshot?.data || lastScreenshot?.result;
@@ -227,14 +219,49 @@ async function executeActionAsync(action, headed = false) {
       console.log(`   👁️ Analyzing image with prompt: ${action.prompt?.slice(0, 100)}...`);
       const visionResult = await analyzeImageWithNano(action.prompt, imageData);
       console.log(`   👁️ Vision result: ${JSON.stringify(visionResult).slice(0, 300)}`);
-      sleep(1500);
+      await sleep(1500);
       return 'ok';
     default:
       return executeAction(action, headed);
   }
 }
 
-function sleep(ms) { const end = Date.now() + ms; while (Date.now() < end); }
+// ── Multimodal Vision Helpers ──
+let lastScreenshot = null;
+
+async function takeScreenshot(annotate = true) {
+  const cmdArgs = ['screenshot'];
+  if (annotate) cmdArgs.push('--annotate');
+  return runAB('screenshot', ...cmdArgs);
+}
+
+async function analyzeImageWithNano(prompt, imageBase64) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: 'localhost',
+      port: 8765,
+      path: '/v1/analyze-image',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 120000,
+    }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          resolve(data.result || data);
+        } catch {
+          resolve({ error: 'Parse error' });
+        }
+      });
+    });
+    req.on('error', e => reject(new Error(`Network error: ${e.message}`)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+    req.write(JSON.stringify({ image: imageBase64, prompt }));
+    req.end();
+  });
+}
 
 // ── WebMCP Helpers ──
 async function webmcpDiscover() {
@@ -247,7 +274,7 @@ async function webmcpDiscover() {
       res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve({ tools: [] }); }});
     });
     req.on('error', () => resolve({ tools: [] }));
-    req.write(JSON.stringify({ tabId: 1 })); // We'll fix tabId when we have it
+    req.write(JSON.stringify({ tabId: 1 }));
     req.end();
   });
 }
@@ -268,71 +295,7 @@ async function webmcpCall(toolName, args) {
 }
 
 async function discoverWebMcpTools() {
-  // Use bridge's chat completions to run a discover via the extension
-  // For now, we'll use the agent-browser snapshot which includes the page URL
-  // and we'll try to discover tools from there
-  // This is a placeholder - real implementation needs the tabId from the extension
   return [];
-}
-
-// ── Multimodal Vision Helpers ──
-async function takeScreenshot(annotate = true) {
-  const importPath = '/home/bobby/.agent-browser/tmp/screenshots';
-  const cmd = [AGENT_BROWSER, '--session', SESSION, '--json', 'screenshot'];
-  if (annotate) cmd.push('--annotate');
-  
-  try {
-    const out = execSync(cmd.join(' '), { timeout: 30000, encoding: 'utf-8' });
-    if (out.trim()) {
-      try { 
-        const data = JSON.parse(out);
-        // Get the screenshot file path
-        const screenshotPath = data.data?.path || data.result?.data?.path;
-        if (screenshotPath && fs.existsSync(screenshotPath)) {
-          // Read file as base64
-          const base64 = fs.readFileSync(screenshotPath, { encoding: 'base64' });
-          return { success: true, base64, path: screenshotPath };
-        }
-        return data;
-      } catch { return { raw: out.trim() }; }
-    }
-    return { ok: true };
-  } catch (e) {
-    const stdout = e.stdout?.toString().trim();
-    if (stdout) {
-      try { 
-        const data = JSON.parse(stdout);
-        const screenshotPath = data.data?.path || data.result?.data?.path;
-        if (screenshotPath && fs.existsSync(screenshotPath)) {
-          const base64 = fs.readFileSync(screenshotPath, { encoding: 'base64' });
-          return { success: true, base64, path: screenshotPath };
-        }
-        return data;
-      } catch { return { raw: stdout }; }
-    }
-    throw new Error(e.stderr?.toString().trim() || e.message);
-  }
-}
-
-async function analyzeImageWithNano(prompt, imageBase64) {
-  // Use bridge's analyze-image endpoint
-  return new Promise(resolve => {
-    const req = http.request({
-      hostname: 'localhost', port: 8765, path: '/v1/analyze-image',
-      method: 'POST', headers: { 'Content-Type': 'application/json' }
-    }, res => {
-      let body = ''; res.on('data', c => body += c);
-      res.on('end', () => {
-        try { 
-          const data = JSON.parse(body);
-          resolve(data.result || data); 
-        } catch { resolve({ error: 'Parse error' }); }
-      });
-    });
-    req.on('error', e => resolve({ error: e.message }));
-    req.write(JSON.stringify({ image: imageBase64, prompt }));
-    req.end();
-  });
 }
 
 async function checkBridge() {
@@ -352,7 +315,7 @@ async function checkBridge() {
   });
 }
 
-async function runAgent(task, maxSteps = DEFAULT_MAX_STEPS, headed = false) {
+async function runAgent(task, maxSteps = 20, headed = false) {
   console.log('🌐 Gemini Nano Browser Agent');
   console.log(`   Task: ${task}`);
   console.log(`   Max steps: ${maxSteps}`);
@@ -364,23 +327,25 @@ async function runAgent(task, maxSteps = DEFAULT_MAX_STEPS, headed = false) {
     { role: 'user', content: `Task: ${task}\n\nI'll show you the page. Respond with your next action as JSON.` },
   ];
 
-  for (let step = 1; step <= maxSteps; step++) {
-    console.log(`── Step ${step}/${maxSteps} ──`);
+  for (let step = 1; step <= 20; step++) {
+    console.log(`── Step ${step}/20 ──`);
 
-    const [tree, pageInfo] = (() => {
-      const result = runAB('snapshot', ...(headed ? ['--headed'] : []));
-      if (result.error) return [null, result.error];
-      const data = result.data;
-      if (!data) return [null, JSON.stringify(result)];
-      const parsed = typeof data === 'string' ? safeParse(data) : data;
-      if (!parsed) return [null, String(data)];
-      const tree = parsed.tree || parsed.snapshot || '';
+    // Get page snapshot
+    let pageInfo;
+    try {
+      const result = await runAB('snapshot');
+      if (result.error) throw new Error(result.error);
+      const data = result.data || result;
+      const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+      const tree = parsed.tree || parsed.snapshot || JSON.stringify(parsed);
       const url = parsed.url || 'unknown';
       const title = parsed.title || 'untitled';
-      return [tree, `URL: ${url}\nTitle: ${title}\n\n${tree}`];
-    })();
+      pageInfo = `URL: ${url}\nTitle: ${title}\n\n${tree}`;
+    } catch (error) {
+      pageInfo = `Could not get snapshot: ${error.message}`;
+    }
 
-    if (!tree) {
+    if (pageInfo.startsWith('Could not')) {
       console.log(`   ⚠️ Snapshot failed: ${pageInfo}`);
       if (step === 1) {
         messages.push({ role: 'user', content: 'No page is currently open. Navigate to a URL first.' });
@@ -406,7 +371,7 @@ async function runAgent(task, maxSteps = DEFAULT_MAX_STEPS, headed = false) {
 
     messages.push({ role: 'assistant', content: response });
 
-    const result = await executeAction(action, headed);
+    const result = await executeAction(action, false);
     
     // Include action result in conversation for the model to see
     if (result && typeof result === 'object') {
@@ -419,7 +384,7 @@ async function runAgent(task, maxSteps = DEFAULT_MAX_STEPS, headed = false) {
   }
 
   console.log('\n🧹 Cleaning up browser...');
-  runAB('close', '--all');
+  await runAB('close', '--all');
   console.log('Done.');
 }
 
@@ -433,12 +398,17 @@ if (args.length === 0) {
 const task = args[0];
 const headed = args.includes('--headed');
 const maxStepsIdx = args.indexOf('--max-steps');
-const maxSteps = maxStepsIdx >= 0 ? parseInt(args[maxStepsIdx + 1]) || DEFAULT_MAX_STEPS : DEFAULT_MAX_STEPS;
+const maxSteps = maxStepsIdx >= 0 ? parseInt(args[maxStepsIdx + 1]) || 20 : 20;
 
 checkBridge().then(ok => {
   if (!ok) {
     console.log('Start bridge: cd ~/gemini-nano-demo/bridge && node server.js &');
     process.exit(1);
   }
-  runAgent(task, maxSteps, headed);
+  runAgent(task, 20, headed).catch(e => {
+    console.error('Agent error:', e);
+    process.exit(1);
+  });
 });
+
+export { runAgent, checkBridge };
