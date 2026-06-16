@@ -359,6 +359,127 @@ app.post('/v1/browser/agent', async (req, res) => {
     }
 });
 
+// ── Memory endpoints ──
+import { getMemory } from './memory.js';
+
+app.post('/v1/memory/session/create', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const session = await memory.createSession(req.body);
+        res.json({ session });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/memory/session/:id', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const session = await memory.getSession(req.params.id);
+        if (!session) return res.status(404).json({ error: 'Session not found' });
+        const context = await memory.getSessionContext(req.params.id);
+        res.json({ session: context });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/v1/memory/session/:id', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const session = await memory.updateSession(req.params.id, req.body);
+        res.json({ session });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/memory/session/:id/complete', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const session = await memory.completeSession(req.params.id, req.body.result);
+        // Learn from completed session
+        await memory.learnFromSession(req.params.id);
+        res.json({ session });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/memory/sessions', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const sessions = await memory.listSessions({
+            status: req.query.status,
+            limit: parseInt(req.query.limit) || 50,
+            offset: parseInt(req.query.offset) || 0,
+        });
+        res.json({ sessions });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/memory/session/:id/step', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const stepId = await memory.addStep(req.params.id, req.body);
+        res.json({ stepId });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/memory/session/:id/steps', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const steps = await memory.getSteps(req.params.id);
+        res.json({ steps });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/memory/memory/create', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const mem = await memory.createMemory(req.body);
+        res.json({ memory: mem });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/memory/search', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const memories = await memory.searchMemories(req.body.query, req.body);
+        res.json({ memories });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/memory/vector-search', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const memories = await memory.vectorSearch(req.body.embedding, req.body);
+        res.json({ memories });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/memory/stats', async (req, res) => {
+    try {
+        const memory = await getMemory();
+        const stats = await memory.getStats();
+        res.json({ stats });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ── Browser screenshot endpoint ──
 import fs from 'fs';
 

@@ -278,6 +278,18 @@ async function sendMessage() {
         return;
     }
 
+    // Handle Memory skills
+    if (activeSkill && activeSkill.memoryAction) {
+        try {
+            const result = await callMemoryApi(activeSkill.memoryAction, userText);
+            addMessage('skill', `[🧠 ${activeSkill.name}] ${result}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
     // Hybrid AI path: call bridge with model selection
     try {
         const aiMsg = addMessage('ai', '');
@@ -548,6 +560,59 @@ window.callAgentApi = async function(action, input) {
     }
     
     return JSON.stringify(result, null, 2);
+};
+
+// ── Memory API ──
+window.callMemoryApi = async function(action, input) {
+    const endpoints = {
+        'save': '/v1/memory/session/create',
+        'load': '/v1/memory/session/',
+        'list': '/v1/memory/sessions',
+        'search': '/v1/memory/search',
+        'stats': '/v1/memory/stats',
+        'learn': '/v1/memory/memory/create',
+    };
+    const endpoint = endpoints[action];
+    if (!endpoint) throw new Error('Unknown memory action: ' + action);
+
+    let body = {}, method = 'POST';
+    if (action === 'save') {
+        try { body = JSON.parse(input); }
+        catch { body = { task: input, model: currentModel }; }
+    } else if (action === 'load') {
+        // GET request with session ID
+        method = 'GET';
+    } else if (action === 'list') {
+        method = 'GET';
+    } else if (action === 'search') {
+        try { body = JSON.parse(input); }
+        catch { body = { query: input }; }
+    } else if (action === 'stats') {
+        method = 'GET';
+    } else if (action === 'learn') {
+        body = { type: 'pattern', content: input, tags: ['manual'], confidence: 0.8 };
+    }
+
+    const url = method === 'GET' && input 
+        ? `http://localhost:8765${endpoint}${input}`
+        : `http://localhost:8765${endpoint}`;
+    
+    const resp = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: method === 'POST' ? JSON.stringify(body) : undefined
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    
+    // Format output nicely
+    if (action === 'stats') return JSON.stringify(data.stats, null, 2);
+    if (action === 'list') return JSON.stringify(data.sessions, null, 2);
+    if (action === 'search') return JSON.stringify(data.memories, null, 2);
+    if (data.session) return JSON.stringify(data.session, null, 2);
+    if (data.memory) return JSON.stringify(data.memory, null, 2);
+    
+    return JSON.stringify(data, null, 2);
 };
 
 let activeAgentSessionId = null;
