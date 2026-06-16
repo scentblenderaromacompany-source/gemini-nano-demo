@@ -47,7 +47,11 @@ RULES:
 6. After each action, you'll see the updated page state
 7. If a page needs loading, just say done for this step
 8. If you can't find the right element, try scrolling
-9. Be concise — just the JSON action, no explanation`;
+9. Be concise — just the JSON action, no explanation
+
+SITE-SPECIFIC HINTS:
+- shopgoodwill.com: Use search for "jewelry" or navigate to /jewelry. Look for auction cards with prices, bids, time remaining. Use WebMCP search_page for "jewelry lots" if available.
+- GitHub: Use WebMCP extract_links for PR files, search_page for code terms.`;
 
 function runAB(...args) {
   return new Promise((resolve, reject) => {
