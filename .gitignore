@@ -53,3 +53,4 @@ venv/
 
 # Bridge node_modules
 bridge/node_modules/
+bridge/agent-memory.db*
