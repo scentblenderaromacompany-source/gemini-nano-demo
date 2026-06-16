@@ -480,6 +480,90 @@ app.get('/v1/memory/stats', async (req, res) => {
     }
 });
 
+// ── Workflow Engine endpoints ──
+import { WorkflowEngine } from './workflow-engine.js';
+
+// Initialize workflow engine (singleton)
+let workflowEngine = null;
+async function getWorkflowEngine() {
+    if (!workflowEngine) {
+        const memory = await getMemory();
+        // Import skill registry
+        const { getAllSkills } = await import('./skill-registry.js');
+        workflowEngine = new WorkflowEngine(memory, { getSkill: (id) => getAllSkills().find(s => s.id === id) });
+        // Load templates
+        const { WORKFLOW_TEMPLATES } = await import('./workflow-engine.js');
+        for (const [id, template] of Object.entries(WORKFLOW_TEMPLATES)) {
+            workflowEngine.loadWorkflow({ ...template, id });
+        }
+    }
+    return workflowEngine;
+}
+
+app.post('/v1/workflow/create', async (req, res) => {
+    try {
+        const engine = await getWorkflowEngine();
+        const workflow = engine.loadWorkflow(req.body);
+        res.json({ workflow: { id: workflow.id, name: workflow.name, stepCount: workflow.steps.length } });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/workflow/list', async (req, res) => {
+    try {
+        const engine = await getWorkflowEngine();
+        const workflows = engine.listWorkflows();
+        res.json({ workflows });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/workflow/templates', async (req, res) => {
+    try {
+        const { WORKFLOW_TEMPLATES } = await import('./workflow-engine.js');
+        res.json({ templates: Object.values(WORKFLOW_TEMPLATES) });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/workflow/:id', async (req, res) => {
+    try {
+        const engine = await getWorkflowEngine();
+        const workflow = engine.workflows.get(req.params.id);
+        if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+        res.json({ workflow });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/v1/workflow/run', async (req, res) => {
+    try {
+        const engine = await getWorkflowEngine();
+        const { workflowId, input = {}, options = {} } = req.body;
+        if (!workflowId) return res.status(400).json({ error: 'workflowId required' });
+        
+        const result = await engine.execute(workflowId, input, { persist: true, ...options });
+        res.json({ result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/v1/workflow/run/:runId', async (req, res) => {
+    try {
+        const engine = await getWorkflowEngine();
+        const run = engine.getRunStatus(req.params.runId);
+        if (!run) return res.status(404).json({ error: 'Run not found' });
+        res.json({ run });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ── Browser screenshot endpoint ──
 import fs from 'fs';
 

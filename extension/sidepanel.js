@@ -290,6 +290,18 @@ async function sendMessage() {
         return;
     }
 
+    // Handle Workflow skills
+    if (activeSkill && activeSkill.workflowAction) {
+        try {
+            const result = await callWorkflowApi(activeSkill.workflowAction, userText);
+            addMessage('skill', `[🔗 ${activeSkill.name}] ${result}`);
+        } catch (err) {
+            addMessage('system', `Error: ${err.message}`);
+        }
+        btn.disabled = false;
+        return;
+    }
+
     // Hybrid AI path: call bridge with model selection
     try {
         const aiMsg = addMessage('ai', '');
@@ -612,6 +624,55 @@ window.callMemoryApi = async function(action, input) {
     if (data.session) return JSON.stringify(data.session, null, 2);
     if (data.memory) return JSON.stringify(data.memory, null, 2);
     
+    return JSON.stringify(data, null, 2);
+};
+
+// ── Workflow API ──
+window.callWorkflowApi = async function(action, input) {
+    const endpoints = {
+        'create': '/v1/workflow/create',
+        'run': '/v1/workflow/run',
+        'status': '/v1/workflow/run/',
+        'list': '/v1/workflow/list',
+        'templates': '/v1/workflow/templates',
+    };
+    const endpoint = endpoints[action];
+    if (!endpoint) throw new Error('Unknown workflow action: ' + action);
+
+    let body = {}, method = 'POST';
+    if (action === 'create') {
+        try { body = JSON.parse(input); }
+        catch { body = { name: input, steps: [] }; }
+    } else if (action === 'run') {
+        try { body = JSON.parse(input); }
+        catch { body = { workflowId: input, input: {} }; }
+    } else if (action === 'status') {
+        method = 'GET';
+    } else if (action === 'list') {
+        method = 'GET';
+    } else if (action === 'templates') {
+        method = 'GET';
+    }
+
+    const url = method === 'GET' && input
+        ? `http://localhost:8765${endpoint}${input}`
+        : `http://localhost:8765${endpoint}`;
+
+    const resp = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: method === 'POST' ? JSON.stringify(body) : undefined
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+
+    // Format output nicely
+    if (action === 'list') return JSON.stringify(data.workflows, null, 2);
+    if (action === 'templates') return JSON.stringify(data.templates, null, 2);
+    if (action === 'status') return JSON.stringify(data.run, null, 2);
+    if (data.workflow) return JSON.stringify(data.workflow, null, 2);
+    if (data.result) return JSON.stringify(data.result, null, 2);
+
     return JSON.stringify(data, null, 2);
 };
 
