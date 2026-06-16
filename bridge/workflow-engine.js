@@ -308,6 +308,8 @@ export const WORKFLOW_TEMPLATES = {
       { id: 'proofread', skill: 'proofread', input: { text: '{{write.result}}' }, dependsOn: ['write'] },
     ],
   },
-};
 
-export default WorkflowEngine;
+  // --- REAL-WORLD AUTOMATION PACK ---
+  // Import will be handled dynamically in server.js
+  // See: bridge/workflows/*.js
+};

@@ -491,10 +491,32 @@ async function getWorkflowEngine() {
         // Import skill registry
         const { getAllSkills } = await import('./skill-registry.js');
         workflowEngine = new WorkflowEngine(memory, { getSkill: (id) => getAllSkills().find(s => s.id === id) });
-        // Load templates
+        // Load built-in templates
         const { WORKFLOW_TEMPLATES } = await import('./workflow-engine.js');
         for (const [id, template] of Object.entries(WORKFLOW_TEMPLATES)) {
             workflowEngine.loadWorkflow({ ...template, id });
+        }
+        // Load dynamic workflows from bridge/workflows/
+        const fs = await import('fs');
+        const path = await import('path');
+        const { fileURLToPath } = await import('url');
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        const workflowsDir = path.join(__dirname, 'workflows');
+        if (fs.existsSync(workflowsDir)) {
+            const files = fs.readdirSync(workflowsDir).filter(f => f.endsWith('.js'));
+            for (const file of files) {
+                try {
+                    const module = await import(path.join(workflowsDir, file));
+                    for (const [key, value] of Object.entries(module)) {
+                        if (key.endsWith('Workflow') && value.id) {
+                            workflowEngine.loadWorkflow({ ...value, id: value.id });
+                        }
+                    }
+                } catch (e) {
+                    console.error('[WorkflowEngine] Failed to load workflow:', file, e.message);
+                }
+            }
         }
     }
     return workflowEngine;
@@ -523,7 +545,36 @@ app.get('/v1/workflow/list', async (req, res) => {
 app.get('/v1/workflow/templates', async (req, res) => {
     try {
         const { WORKFLOW_TEMPLATES } = await import('./workflow-engine.js');
-        res.json({ templates: Object.values(WORKFLOW_TEMPLATES) });
+        
+        // Also load dynamic workflows from bridge/workflows/
+        const fs = await import('fs');
+        const path = await import('path');
+        const { fileURLToPath } = await import('url');
+        
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        const workflowsDir = path.join(__dirname, 'workflows');
+        
+        let dynamicTemplates = {};
+        if (fs.existsSync(workflowsDir)) {
+            const files = fs.readdirSync(workflowsDir).filter(f => f.endsWith('.js'));
+            for (const file of files) {
+                try {
+                    const module = await import(path.join(workflowsDir, file));
+                    // Export should be named like: githubPrReviewWorkflow, researchReportWorkflow, etc.
+                    for (const [key, value] of Object.entries(module)) {
+                        if (key.endsWith('Workflow') && value.id) {
+                            dynamicTemplates[value.id] = value;
+                        }
+                    }
+                } catch (e) {
+                    console.error('[Templates] Failed to load:', file, e.message);
+                }
+            }
+        }
+        
+        const allTemplates = { ...WORKFLOW_TEMPLATES, ...dynamicTemplates };
+        res.json({ templates: Object.values(allTemplates) });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
