@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Nano Playground</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #4285f4, #34a853, #fbbc05, #ea4335);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle { color: #888; margin-bottom: 2rem; font-size: 0.9rem; }
+        #status {
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+        .status-loading { background: #2a2a2a; color: #fbbc05; }
+        .status-ready { background: #0a2e1a; color: #34a853; }
+        .status-error { background: #2e0a0a; color: #ea4335; }
+        .status-info { background: #0a1a2e; color: #4285f4; }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+        }
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        .tab {
+            padding: 0.5rem 1rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #aaa;
+            transition: all 0.2s;
+        }
+        .tab:hover { border-color: #4285f4; color: #fff; }
+        .tab.active {
+            background: #1a2a3a;
+            border-color: #4285f4;
+            color: #4285f4;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #e0e0e0;
+            padding: 1rem;
+            font-size: 0.95rem;
+            font-family: inherit;
+            resize: vertical;
+            margin-bottom: 1rem;
+        }
+        textarea:focus { outline: none; border-color: #4285f4; }
+        .btn-row { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+        button {
+            padding: 0.6rem 1.5rem;
+            background: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover { background: #3367d6; }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; }
+        .btn-stream { background: #34a853; }
+        .btn-stream:hover { background: #2d9249; }
+        .btn-clear { background: #333; }
+        .btn-clear:hover { background: #444; }
+
+        #output {
+            width: 100%;
+            min-height: 200px;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.6;
+            overflow-y: auto;
+            max-height: 500px;
+        }
+        .output-label {
+            font-size: 0.75rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.5rem;
+        }
+        .params {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .param label {
+            display: block;
+            font-size: 0.75rem;
+            color: #888;
+            margin-bottom: 0.3rem;
+        }
+        .param input, .param select {
+            width: 100%;
+            padding: 0.4rem;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+        }
+        .examples {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+        }
+        .examples h3 { font-size: 0.85rem; color: #888; margin-bottom: 0.5rem; }
+        .example-btn {
+            display: inline-block;
+            padding: 0.3rem 0.8rem;
+            background: #1a1a2a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #aaa;
+            font-size: 0.8rem;
+            cursor: pointer;
+            margin: 0.2rem;
+            transition: all 0.2s;
+        }
+        .example-btn:hover { border-color: #4285f4; color: #fff; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Gemini Nano Playground</h1>
+    <p class="subtitle">On-device AI powered by Chrome's built-in Gemini Nano model</p>
+
+    <div id="status" class="status-loading">Checking model availability...</div>
+
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" data-mode="prompt">💬 Prompt</div>
+            <div class="tab" data-mode="summarize">📝 Summarize</div>
+            <div class="tab" data-mode="rewrite">✏️ Rewrite</div>
+            <div class="tab" data-mode="write">✍️ Write</div>
+            <div class="tab" data-mode="translate">🌐 Translate</div>
+            <div class="tab" data-mode="classify">🏷️ Classify</div>
+            <div class="tab" data-mode="extract">📋 Extract</div>
+        </div>
+
+        <div class="params">
+            <div class="param">
+                <label>Temperature</label>
+                <input type="range" id="temp" min="0" max="2" step="0.1" value="0.7">
+                <span id="temp-val">0.7</span>
+            </div>
+            <div class="param">
+                <label>Max Tokens (display)</label>
+                <select id="max-tokens">
+                    <option value="256">256</option>
+                    <option value="512" selected>512</option>
+                    <option value="1024">1024</option>
+                </select>
+            </div>
+        </div>
+
+        <textarea id="prompt" placeholder="Type your prompt here..."></textarea>
+
+        <div class="btn-row">
+            <button id="run-btn" disabled onclick="runPrompt()">▶ Run</button>
+            <button id="stream-btn" class="btn-stream" disabled onclick="runStream()">⚡ Stream</button>
+            <button class="btn-clear" onclick="clearOutput()">🗑 Clear</button>
+        </div>
+
+        <div class="output-label">Output</div>
+        <div id="output">Model loading...</div>
+
+        <div class="examples" id="examples">
+            <h3>Quick Examples</h3>
+            <div id="example-buttons"></div>
+        </div>
+    </div>
+
+    <script>
+        let session = null;
+        let currentMode = 'prompt';
+
+        const examples = {
+            prompt: [
+                "Explain quantum computing in 3 sentences",
+                "What are the pros and cons of Rust vs Go?",
+                "Write a haiku about debugging code at 3am",
+                "Convert this JSON to YAML: {\"name\": \"test\", \"count\": 42}",
+            ],
+            summarize: [
+                "The quick brown fox jumps over the lazy dog. This sentence contains every letter of the alphabet and has been used for centuries in typing tests and font displays. It remains one of the most well-known pangrams in the English language.",
+                "Machine learning is a subset of artificial intelligence that enables systems to learn from data and improve their performance over time without being explicitly programmed. It encompasses supervised learning, unsupervised learning, and reinforcement learning paradigms.",
+            ],
+            rewrite: [
+                "Make this more formal: Hey dude, can you like send me that thing ASAP?",
+                "Simplify this: The utilization of computational paradigms facilitates the optimization of algorithmic processes.",
+            ],
+            write: [
+                "Write a commit message for: fixed a bug where the user's session expired but the UI still showed them as logged in",
+                "Write a professional Slack message declining a meeting invitation",
+            ],
+            translate: [
+                "Translate to Japanese: The weather is beautiful today",
+                "Translate to Spanish: How do I reset my password?",
+            ],
+            classify: [
+                "Classify this as spam or not spam: CONGRATULATIONS! You've won $1,000,000! Click here to claim NOW!",
+                "Classify this email priority: Your flight tomorrow at 6am has been cancelled",
+            ],
+            extract: [
+                "Extract all email addresses and phone numbers: Contact John at john@example.com or call (555) 123-4567. Sarah can be reached at sarah@test.org.",
+                "Extract key entities: Apple Inc. reported record Q4 revenue of $120 billion in Cupertino on Tuesday.",
+            ]
+        };
+
+        const prompts = {
+            prompt: (text) => text,
+            summarize: (text) => `Summarize the following in 2-3 sentences:\n\n${text}`,
+            rewrite: (text) => `Rewrite the following text. ${text}`,
+            write: (text) => text,
+            translate: (text) => text,
+            classify: (text) => `Classify the following and respond with just the category. ${text}`,
+            extract: (text) => `Extract the requested information from this text. Be concise.\n\n${text}`,
+        };
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentMode = tab.dataset.mode;
+                renderExamples();
+                updatePlaceholder();
+            });
+        });
+
+        // Temperature slider
+        document.getElementById('temp').addEventListener('input', (e) => {
+            document.getElementById('temp-val').textContent = e.target.value;
+        });
+
+        function renderExamples() {
+            const container = document.getElementById('example-buttons');
+            container.innerHTML = '';
+            (examples[currentMode] || []).forEach(ex => {
+                const btn = document.createElement('span');
+                btn.className = 'example-btn';
+                btn.textContent = ex.substring(0, 50) + (ex.length > 50 ? '...' : '');
+                btn.onclick = () => {
+                    document.getElementById('prompt').value = ex;
+                };
+                container.appendChild(btn);
+            });
+        }
+
+        function updatePlaceholder() {
+            const ph = {
+                prompt: "Type any question or instruction...",
+                summarize: "Paste text to summarize...",
+                rewrite: "Paste text to rewrite (include rewrite instructions)...",
+                write: "Describe what you want written...",
+                translate: "Type text to translate (include target language)...",
+                classify: "Paste text to classify (include categories)...",
+                extract: "Paste text and describe what to extract...",
+            };
+            document.getElementById('prompt').placeholder = ph[currentMode] || '';
+        }
+
+        function setStatus(msg, type) {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.className = `status-${type}`;
+        }
+
+        function setOutput(text) {
+            document.getElementById('output').textContent = text;
+        }
+
+        function appendOutput(text) {
+            document.getElementById('output').textContent += text;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').textContent = '';
+        }
+
+        async function initModel() {
+            try {
+                setStatus('Loading Gemini Nano model...', 'loading');
+
+                if (typeof LanguageModel === 'undefined') {
+                    setStatus('LanguageModel API not available — check chrome://flags', 'error');
+                    setOutput('ERROR: LanguageModel API is not available.\n\nTry enabling:\n  chrome://flags/#optimization-guide-on-device-model\n  Set to: "Enabled BypassPerfRequirement"\n\nThen restart Chrome and reload this page.');
+                    return;
+                }
+
+                const avail = await LanguageModel.availability();
+                setStatus(`Model status: ${avail}`, 'info');
+
+                if (avail === 'unavailable') {
+                    setStatus('Model not available on this system', 'error');
+                    setOutput('Gemini Nano is not available.\nRequirements:\n- 16GB+ RAM (you have 37GB ✓)\n- 4+ CPU cores (you have 4 ✓)\n- GPU with 4GB+ VRAM (or CPU fallback)\n\nCheck: chrome://on-device-internals/');
+                    return;
+                }
+
+                session = await LanguageModel.create({
+                    monitor(m) {
+                        m.addEventListener('downloadprogress', (e) => {
+                            setStatus(`Downloading model: ${(e.loaded * 100).toFixed(1)}%`, 'loading');
+                        });
+                    }
+                });
+
+                setStatus(`Gemini Nano ready — ${session.contextWindow} token context`, 'ready');
+                document.getElementById('run-btn').disabled = false;
+                document.getElementById('stream-btn').disabled = false;
+                setOutput('Model loaded. Type a prompt and click Run or Stream.');
+
+            } catch (err) {
+                setStatus(`Error: ${err.message}`, 'error');
+                setOutput(`Failed to initialize Gemini Nano:\n${err.message}\n\nStack:\n${err.stack}`);
+            }
+        }
+
+        async function runPrompt() {
+            if (!session) return;
+            const input = document.getElementById('prompt').value.trim();
+            if (!input) return;
+
+            const btn = document.getElementById('run-btn');
+            btn.disabled = true;
+            setOutput('Thinking...');
+
+            try {
+                const fullPrompt = prompts[currentMode](input);
+                const result = await session.prompt(fullPrompt);
+                setOutput(result);
+            } catch (err) {
+                setOutput(`Error: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function runStream() {
+            if (!session) return;
+            const input = document.getElementById('prompt').value.trim();
+            if (!input) return;
+
+            const btn = document.getElementById('stream-btn');
+            btn.disabled = true;
+            clearOutput();
+
+            try {
+                const fullPrompt = prompts[currentMode](input);
+                const stream = session.promptStreaming(fullPrompt);
+                for await (const chunk of stream) {
+                    appendOutput(chunk);
+                }
+            } catch (err) {
+                appendOutput(`\n\nError: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // Init
+        renderExamples();
+        updatePlaceholder();
+        initModel();
+    </script>
+</body>
+</html>

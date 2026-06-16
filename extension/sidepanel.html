@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            padding: 0.8rem 1rem;
+            background: #111;
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .header h1 {
+            font-size: 1rem;
+            background: linear-gradient(135deg, #4285f4, #34a853);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        #status {
+            font-size: 0.65rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: auto;
+        }
+        .ready { background: #0a2e1a; color: #34a853; }
+        .loading { background: #2a2a2a; color: #fbbc05; }
+        .error { background: #2e0a0a; color: #ea4335; }
+
+        /* Skill Bar */
+        .skill-bar {
+            padding: 0.5rem;
+            background: #0d0d0d;
+            border-bottom: 1px solid #222;
+            display: flex;
+            gap: 0.3rem;
+            overflow-x: auto;
+            flex-wrap: nowrap;
+        }
+        .skill-bar::-webkit-scrollbar { height: 3px; }
+        .skill-bar::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        .skill-chip {
+            padding: 0.3rem 0.6rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            color: #aaa;
+            font-size: 0.7rem;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .skill-chip:hover { border-color: #4285f4; color: #fff; }
+        .skill-chip.active { background: #1a2a4a; border-color: #4285f4; color: #4285f4; }
+
+        /* Skill Panel */
+        .skill-panel {
+            display: none;
+            padding: 0.8rem;
+            background: #111;
+            border-bottom: 1px solid #222;
+        }
+        .skill-panel.visible { display: block; }
+        .skill-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .skill-info .icon { font-size: 1.5rem; }
+        .skill-info .name { font-weight: 600; font-size: 0.9rem; }
+        .skill-info .desc { font-size: 0.75rem; color: #888; }
+        .skill-close {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+        .skill-context {
+            font-size: 0.7rem;
+            color: #555;
+            padding: 0.3rem 0;
+            border-top: 1px solid #222;
+            margin-top: 0.5rem;
+        }
+
+        /* Chat */
+        #chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+        .msg {
+            padding: 0.7rem 1rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            max-width: 90%;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .msg-user { background: #1a2a4a; align-self: flex-end; border-bottom-right-radius: 4px; }
+        .msg-ai { background: #1a1a1a; border: 1px solid #2a2a2a; align-self: flex-start; border-bottom-left-radius: 4px; }
+        .msg-system { background: transparent; color: #555; font-size: 0.7rem; align-self: center; text-align: center; }
+        .msg-skill {
+            background: #1a1a2a;
+            border: 1px solid #2a2a3a;
+            border-left: 3px solid #4285f4;
+            align-self: flex-start;
+            font-size: 0.8rem;
+        }
+
+        /* Input */
+        .input-area {
+            padding: 0.8rem 1rem;
+            border-top: 1px solid #333;
+            background: #111;
+        }
+        .mode-row {
+            display: flex;
+            gap: 0.3rem;
+            margin-bottom: 0.5rem;
+        }
+        .mode-btn {
+            padding: 0.2rem 0.5rem;
+            background: transparent;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #888;
+            font-size: 0.65rem;
+            cursor: pointer;
+        }
+        .mode-btn.active { border-color: #4285f4; color: #4285f4; }
+        .input-row { display: flex; gap: 0.5rem; }
+        #user-input {
+            flex: 1;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #e0e0e0;
+            padding: 0.6rem 0.8rem;
+            font-size: 0.85rem;
+            font-family: inherit;
+            resize: none;
+            min-height: 40px;
+            max-height: 120px;
+        }
+        #user-input:focus { outline: none; border-color: #4285f4; }
+        #send-btn {
+            padding: 0.6rem 1rem;
+            background: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+            align-self: flex-end;
+        }
+        #send-btn:disabled { background: #333; color: #666; }
+
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Gemini Nano</h1>
+        <span id="status" class="loading">Loading...</span>
+    </div>
+
+    <div class="skill-bar" id="skill-bar"></div>
+
+    <div class="skill-panel" id="skill-panel">
+        <div class="skill-info">
+            <span class="icon" id="skill-icon"></span>
+            <div>
+                <div class="name" id="skill-name"></div>
+                <div class="desc" id="skill-desc"></div>
+            </div>
+            <button class="skill-close" id="skill-close-btn">✕</button>
+        </div>
+        <div class="skill-context" id="skill-context"></div>
+    </div>
+
+    <div id="chat">
+        <div class="msg msg-system">Gemini Nano runs 100% on your device. Select a skill or type freely.</div>
+    </div>
+
+    <div class="input-area">
+        <div class="mode-row">
+            <span class="mode-btn active" data-mode="chat">💬 Chat</span>
+            <span class="mode-btn" data-mode="page">📄 +Page</span>
+            <span class="mode-btn" data-mode="selection">✂️ Select</span>
+        </div>
+        <div class="input-row">
+            <textarea id="user-input" placeholder="Ask anything or pick a skill above..." rows="1"></textarea>
+            <button id="send-btn">▶</button>
+        </div>
+    </div>
+
+    <script src="skills/registry.js"></script>
+    <script src="sidepanel.js"></script>
+</body>
+</html>

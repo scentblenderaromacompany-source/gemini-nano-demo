@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS / system
+.DS_Store
+Thumbs.db
+*.log
+
+# Secrets & env files
+.env
+.env.*
+*.pem
+*.key
+!*.pem.example
+
+# Build output
+dist/
+build/
+*.egg-info/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.venvs/
+
+# Snap data symlinks (user-specific)
+/snap-data/
+
+# Chrome profile data (user-specific)
+.chrome-profile/
+
+# Package manager caches
+.npm/
+.yarn/
+.cache/uv/
+.cache/pip/
+
+# Model weights (too large for git)
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+
+# Bridge node_modules
+bridge/node_modules/

@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Nano Agent",
+  "version": "3.0",
+  "description": "AI agent with image analysis + browser harness bridge \u2014 powered by Chrome's Gemini Nano",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "sidePanel",
+    "scripting",
+    "tabs",
+    "offscreen",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://localhost:8765/*",
+    "ws://localhost:8765/*"
+  ],
+  "background": {
+    "service_worker": "background-v4.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Gemini Nano Agent (Ctrl+Shift+G)",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "toggle-sidepanel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+G",
+        "mac": "Command+Shift+G"
+      },
+      "description": "Toggle Gemini Nano Agent panel"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "skills/registry.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

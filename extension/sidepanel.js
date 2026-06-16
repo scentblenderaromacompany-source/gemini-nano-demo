@@ -1,0 +1,350 @@
+// Gemini Nano Assistant — Side Panel with Skills
+// Runs entirely on-device via Chrome's built-in Prompt API
+
+let session = null;
+let mode = 'chat';
+let activeSkill = null;
+let conversationHistory = [];
+
+// --- Init ---
+async function init() {
+    const status = document.getElementById('status');
+    try {
+        if (typeof LanguageModel === 'undefined') {
+            status.textContent = 'API N/A';
+            status.className = 'error';
+            addMessage('system', 'LanguageModel API not available.\nEnable: chrome://flags/#optimization-guide-on-device-model');
+            return;
+        }
+
+        const avail = await LanguageModel.availability();
+        if (avail !== 'available' && avail !== 'downloadable') {
+            status.textContent = avail;
+            status.className = 'error';
+            return;
+        }
+
+        status.textContent = 'Loading model...';
+        session = await LanguageModel.create({
+            expectedOutputs: [{ type: 'text', languages: ['en'] }],
+            monitor(m) {
+                m.addEventListener('downloadprogress', (e) => {
+                    status.textContent = `${(e.loaded * 100).toFixed(0)}%`;
+                });
+            }
+        });
+
+        status.textContent = 'Ready';
+        status.className = 'ready';
+        renderSkills();
+    } catch (err) {
+        status.textContent = 'Error';
+        status.className = 'error';
+        addMessage('system', `Init error: ${err.message}`);
+    }
+}
+
+// --- Skills ---
+function renderSkills() {
+    const bar = document.getElementById('skill-bar');
+    bar.innerHTML = '';
+
+    const categories = getSkillsByCategory();
+    for (const [cat, skills] of Object.entries(categories)) {
+        if (skills.length === 0) continue;
+
+        const label = document.createElement('span');
+        label.style.cssText = 'font-size:0.6rem;color:#555;padding:0.3rem 0.3rem;white-space:nowrap;align-self:center;';
+        label.textContent = cat;
+        bar.appendChild(label);
+
+        for (const skill of skills) {
+            const chip = document.createElement('span');
+            chip.className = 'skill-chip';
+            chip.dataset.skillId = skill.id;
+            chip.innerHTML = `${skill.icon} ${skill.name}`;
+            chip.title = skill.description;
+            chip.onclick = () => activateSkill(skill.id);
+            bar.appendChild(chip);
+        }
+    }
+}
+
+function activateSkill(skillId) {
+    const skill = getSkill(skillId);
+    if (!skill) return;
+
+    activeSkill = skill;
+
+    // Update UI
+    document.querySelectorAll('.skill-chip').forEach(c => c.classList.remove('active'));
+    const chip = document.querySelector(`[data-skill-id="${skillId}"]`);
+    if (chip) chip.classList.add('active');
+
+    const panel = document.getElementById('skill-panel');
+    panel.classList.add('visible');
+    document.getElementById('skill-icon').textContent = skill.icon;
+    document.getElementById('skill-name').textContent = skill.name;
+    document.getElementById('skill-desc').textContent = skill.description;
+
+    // Set appropriate mode
+    if (skill.mode === 'page' || skill.mode === 'selection-or-page') {
+        setMode(document.querySelector('[data-mode="page"]'));
+    } else if (skill.mode === 'selection') {
+        setMode(document.querySelector('[data-mode="selection"]'));
+    }
+
+    // Update context info
+    const ctx = document.getElementById('skill-context');
+    const modeDesc = {
+        'page': '📄 Will include current page content as context',
+        'selection': '✂️ Will include selected text — select text on the page first',
+        'selection-or-page': '✂️📄 Will use selected text if available, otherwise full page',
+        'chat': '💬 Free-form chat with this skill\'s system prompt',
+    };
+    ctx.textContent = modeDesc[skill.mode] || '';
+
+    addMessage('system', `Skill activated: ${skill.icon} ${skill.name} — ${skill.description}`);
+}
+
+function deactivateSkill() {
+    activeSkill = null;
+    document.querySelectorAll('.skill-chip').forEach(c => c.classList.remove('active'));
+    document.getElementById('skill-panel').classList.remove('visible');
+    addMessage('system', 'Skill deactivated — back to free chat');
+}
+
+// --- Context Extraction ---
+async function getPageText() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+                const walker = document.createTreeWalker(
+                    document.body, NodeFilter.SHOW_TEXT, {
+                        acceptNode: (node) => {
+                            const p = node.parentElement;
+                            if (!p || ['SCRIPT','STYLE','NOSCRIPT'].includes(p.tagName))
+                                return NodeFilter.FILTER_REJECT;
+                            const s = window.getComputedStyle(p);
+                            if (s.display === 'none' || s.visibility === 'hidden')
+                                return NodeFilter.FILTER_REJECT;
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    });
+                let text = '', node;
+                while ((node = walker.nextNode())) {
+                    const t = node.textContent.trim();
+                    if (t) text += t + '\n';
+                }
+                return text.substring(0, 5000);
+            }
+        });
+        return results?.[0]?.result || '';
+    } catch { return ''; }
+}
+
+async function getCodeBlocks() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+                const blocks = [];
+                document.querySelectorAll('pre, code, .highlight, [class*="language-"]').forEach(el => {
+                    const text = el.textContent.trim();
+                    if (text.length > 10 && text.length < 10000) {
+                        blocks.push(text);
+                    }
+                });
+                return blocks.join('\n\n---\n\n').substring(0, 5000);
+            }
+        });
+        return results?.[0]?.result || '';
+    } catch { return ''; }
+}
+
+async function getSelection() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => window.getSelection().toString()
+        });
+        return results?.[0]?.result || '';
+    } catch { return ''; }
+}
+
+async function getContextForSkill(skill) {
+    if (!skill) return '';
+
+    if (skill.extract === 'code-blocks') {
+        const sel = await getSelection();
+        if (sel) return `Code:\n\`\`\`\n${sel}\n\`\`\``;
+        const code = await getCodeBlocks();
+        if (code) return `Code found on page:\n\`\`\`\n${code}\n\`\`\``;
+        return await getPageText();
+    }
+
+    if (skill.extract === 'full-page') {
+        return await getPageText();
+    }
+
+    // Default: selection or page
+    const sel = await getSelection();
+    if (sel) return sel;
+    return await getPageText();
+}
+
+// --- Chat ---
+function addMessage(type, text) {
+    const chat = document.getElementById('chat');
+    const div = document.createElement('div');
+    div.className = `msg msg-${type}`;
+    div.textContent = text;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+}
+
+async function sendMessage() {
+    const input = document.getElementById('user-input');
+    const userText = input.value.trim();
+    if (!userText || !session) return;
+
+    input.value = '';
+    autoResize(input);
+    addMessage('user', userText);
+
+    const btn = document.getElementById('send-btn');
+    btn.disabled = true;
+
+    // Build the full prompt
+    let fullPrompt = '';
+
+    // 1. System prompt from skill
+    if (activeSkill) {
+        fullPrompt += `[System: ${activeSkill.systemPrompt}]\n\n`;
+    }
+
+    // 2. Context based on mode + skill
+    let context = '';
+    if (activeSkill && (activeSkill.mode === 'page' || activeSkill.mode === 'selection' || activeSkill.mode === 'selection-or-page')) {
+        context = await getContextForSkill(activeSkill);
+    } else if (mode === 'page') {
+        context = await getPageText();
+    } else if (mode === 'selection') {
+        context = await getSelection();
+    }
+
+    if (context) {
+        fullPrompt += `Context:\n---\n${context}\n---\n\n`;
+    }
+
+    // 3. User's instruction
+    fullPrompt += userText;
+
+    // Add to conversation history
+    conversationHistory.push({ role: 'user', content: fullPrompt });
+    if (conversationHistory.length > 10) {
+        conversationHistory = conversationHistory.slice(-10);
+    }
+
+    // Stream response
+    const aiMsg = addMessage('ai', '');
+
+    try {
+        const stream = session.promptStreaming(conversationHistory);
+        for await (const chunk of stream) {
+            aiMsg.textContent += chunk;
+            document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+        }
+        conversationHistory.push({ role: 'assistant', content: aiMsg.textContent });
+    } catch (err) {
+        aiMsg.textContent = `Error: ${err.message}`;
+    }
+
+    btn.disabled = false;
+}
+
+// --- UI ---
+function setMode(el) {
+    if (!el) return;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+    mode = el.dataset.mode;
+}
+
+function autoResize(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+}
+
+// Auto-resize input
+document.getElementById('user-input').addEventListener('input', function() {
+    autoResize(this);
+});
+
+// Enter to send, Shift+Enter for newline
+document.getElementById('user-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+
+// Open side panel on icon click
+chrome.action.onClicked.addListener(() => {
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT });
+});
+
+// Skill close button
+document.getElementById('skill-close-btn').addEventListener('click', deactivateSkill);
+
+// Mode buttons
+document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn));
+});
+
+// Send button
+document.getElementById('send-btn').addEventListener('click', sendMessage);
+
+// Paste image handler
+document.addEventListener('paste', async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+        if (item.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const b64 = reader.result.split(',')[1];
+                addMessage('user', '[Pasted image]');
+                const aiMsg = addMessage('ai', 'Analyzing image...');
+                try {
+                    const result = await window.analyzeImage(b64, 'Describe this image in detail');
+                    aiMsg.textContent = result;
+                } catch (err) {
+                    aiMsg.textContent = `Error: ${err.message}`;
+                }
+            };
+            reader.readAsDataURL(blob);
+            break;
+        }
+    }
+});
+
+// Image analysis via bridge
+window.analyzeImage = async function(imageB64, prompt) {
+    const resp = await fetch('http://localhost:8765/v1/analyze-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: imageB64, prompt })
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    return data.result;
+};
+
+init();
